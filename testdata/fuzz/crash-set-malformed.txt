@@ -1,0 +1,14 @@
+Crash: Set operation with malformed XML
+Input: xml="<root>" path="root.item" value="value"
+Error: runtime error: slice bounds out of range [:-1]
+Test: FuzzSet/seed#8, FuzzSetMalformed/seed#0
+Severity: High - Panic in Set operation
+
+This crash occurs when Set() is called on malformed XML (unclosed root tag).
+The builder code has a slice bounds error when trying to manipulate the malformed structure.
+
+Expected behavior: Set should either:
+1. Return an error for malformed XML
+2. Handle malformed input gracefully without panic
+
+Fix required in: builder.go (Set implementation)

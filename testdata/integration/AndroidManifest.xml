@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.myapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+  <uses-sdk
+      android:minSdkVersion="21"
+      android:targetSdkVersion="33" />
+
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+  <application
+      android:allowBackup="true"
+      android:icon="@mipmap/ic_launcher"
+      android:label="@string/app_name"
+      android:theme="@style/AppTheme">
+
+    <activity
+        android:name=".MainActivity"
+        android:label="@string/app_name"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+
+    <activity
+        android:name=".DetailActivity"
+        android:label="@string/detail_title"
+        android:parentActivityName=".MainActivity">
+    </activity>
+
+    <service
+        android:name=".MyService"
+        android:enabled="true"
+        android:exported="false">
+    </service>
+
+  </application>
+
+</manifest>

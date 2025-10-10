@@ -1,0 +1,25 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background version -->
+  <circle cx="100" cy="100" r="95" fill="#1e1e1e" stroke="#2d2d2d" stroke-width="2"/>
+
+  <!-- Left angle bracket -->
+  <path d="M 75 60 L 45 100 L 75 140"
+        stroke="#61afef"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+
+  <!-- Right angle bracket -->
+  <path d="M 125 60 L 155 100 L 125 140"
+        stroke="#61afef"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+
+  <!-- Dots representing path notation -->
+  <circle cx="100" cy="80" r="6" fill="#e06c75"/>
+  <circle cx="100" cy="100" r="6" fill="#e06c75"/>
+  <circle cx="100" cy="120" r="6" fill="#e06c75"/>
+</svg>

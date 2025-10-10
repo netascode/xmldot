@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Tech News Daily</title>
+    <link>https://technews.example.com</link>
+    <description>Latest technology news and updates</description>
+    <language>en-us</language>
+    <pubDate>Mon, 08 Oct 2025 10:00:00 GMT</pubDate>
+    <lastBuildDate>Mon, 08 Oct 2025 10:00:00 GMT</lastBuildDate>
+    <item>
+      <title>Go 1.25 Released with Major Performance Improvements</title>
+      <link>https://technews.example.com/go-1-25</link>
+      <description>The Go team announces Go 1.25 with significant performance improvements</description>
+      <pubDate>Mon, 08 Oct 2025 09:00:00 GMT</pubDate>
+      <guid>https://technews.example.com/go-1-25</guid>
+      <category>programming</category>
+    </item>
+    <item>
+      <title>AI Advances: New Breakthrough in Natural Language Processing</title>
+      <link>https://technews.example.com/ai-breakthrough</link>
+      <description>Researchers achieve new breakthrough in AI language understanding</description>
+      <pubDate>Sun, 07 Oct 2025 14:30:00 GMT</pubDate>
+      <guid>https://technews.example.com/ai-breakthrough</guid>
+      <category>ai</category>
+    </item>
+    <item>
+      <title>Cloud Computing Trends for 2026</title>
+      <link>https://technews.example.com/cloud-trends</link>
+      <description>Analysis of emerging cloud computing trends</description>
+      <pubDate>Sat, 06 Oct 2025 11:00:00 GMT</pubDate>
+      <guid>https://technews.example.com/cloud-trends</guid>
+      <category>cloud</category>
+    </item>
+  </channel>
+</rss>

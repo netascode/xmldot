@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Development Blog</title>
+  <link href="https://devblog.example.com/"/>
+  <updated>2025-10-08T10:00:00Z</updated>
+  <author>
+    <name>Jane Developer</name>
+    <email>jane@example.com</email>
+  </author>
+  <id>urn:uuid:12345678-1234-1234-1234-123456789012</id>
+  <entry>
+    <title>Building High-Performance APIs</title>
+    <link href="https://devblog.example.com/high-performance-apis"/>
+    <id>urn:uuid:abcd1234-abcd-1234-abcd-123456789012</id>
+    <updated>2025-10-08T09:00:00Z</updated>
+    <summary>Tips for building scalable high-performance APIs</summary>
+    <content type="html">&lt;p&gt;API performance is crucial...&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Understanding Database Indexes</title>
+    <link href="https://devblog.example.com/database-indexes"/>
+    <id>urn:uuid:efgh5678-efgh-5678-efgh-567890123456</id>
+    <updated>2025-10-07T15:00:00Z</updated>
+    <summary>Deep dive into database index strategies</summary>
+    <content type="html">&lt;p&gt;Indexes improve query performance...&lt;/p&gt;</content>
+  </entry>
+</feed>

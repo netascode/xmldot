@@ -1,0 +1,97 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    # Core linters (already passing)
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Additional code quality linters
+    - misspell       # Spell checking
+    - revive         # Fast, configurable linter
+    # - gocyclo      # Cyclomatic complexity (disabled - parser complexity is inherent)
+    # - gocognit     # Cognitive complexity (disabled - parser complexity is inherent)
+    - dupl           # Code duplication detection
+
+    # Performance & optimization
+    - prealloc       # Preallocate slices
+    - unconvert      # Remove unnecessary conversions
+
+    # Best practices
+    - nakedret       # Naked returns
+    - goprintffuncname  # Printf-like naming
+    - bodyclose      # HTTP response body close
+
+    # Security
+    - gosec          # Security issues
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false  # Don't check blank assignments in test code
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Field alignment is not critical for readability
+
+    revive:
+      severity: warning
+      confidence: 0.8
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    # Parser libraries need higher complexity limits
+    gocyclo:
+      min-complexity: 50  # Parser state machines are complex
+
+    gocognit:
+      min-complexity: 50  # Parser grammar rules increase cognitive load
+
+    dupl:
+      threshold: 150      # Allow similar parsing/test patterns
+
+    misspell:
+      locale: US
+
+    nakedret:
+      max-func-lines: 30
+
+    gosec:
+      severity: medium
+      confidence: medium
+      excludes:
+        - G104  # Covered by errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

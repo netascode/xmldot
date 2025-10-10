@@ -1,0 +1,14 @@
+Bug: Attribute results return incorrect type
+Input: Multiple attribute access patterns (e.g., "<root a='b'/>" with path "root.@a")
+Expected: result.Type should be String (type constant for string values)
+Actual: result.Type is 6
+
+Severity: Medium - Type inconsistency but doesn't cause crashes
+
+This indicates an issue with Result type constants or attribute result creation.
+Need to check:
+1. Result type constants definition
+2. Attribute result creation in Get operation
+3. Type assignment for attribute values
+
+Fix required in: result.go or get.go (attribute result creation)

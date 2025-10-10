@@ -1,0 +1,24 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Simple icon version (transparent background) -->
+
+  <!-- Left angle bracket -->
+  <path d="M 48 24 L 16 64 L 48 104"
+        stroke="#4a90e2"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+
+  <!-- Right angle bracket -->
+  <path d="M 80 24 L 112 64 L 80 104"
+        stroke="#4a90e2"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+
+  <!-- Dots representing path notation -->
+  <circle cx="64" cy="44" r="5" fill="#e74c3c"/>
+  <circle cx="64" cy="64" r="5" fill="#e74c3c"/>
+  <circle cx="64" cy="84" r="5" fill="#e74c3c"/>
+</svg>

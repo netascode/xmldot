@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <soap:Header>
+    <auth:Authentication xmlns:auth="http://example.com/auth">
+      <auth:Username>user123</auth:Username>
+      <auth:Token>abc123xyz789</auth:Token>
+      <auth:Timestamp>2025-10-08T10:00:00Z</auth:Timestamp>
+    </auth:Authentication>
+  </soap:Header>
+  <soap:Body>
+    <m:GetStockPrice xmlns:m="http://example.com/stock">
+      <m:StockSymbol>AAPL</m:StockSymbol>
+      <m:Exchange>NASDAQ</m:Exchange>
+    </m:GetStockPrice>
+  </soap:Body>
+</soap:Envelope>
