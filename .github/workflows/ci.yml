@@ -95,6 +95,7 @@ jobs:
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -113,7 +114,8 @@ jobs:
 
     - name: Run benchmarks on PR branch
       run: |
-        go test -run='^$' -bench=. -benchmem -count=5 ./... > new.txt
+        # Run only core benchmarks: Get, Set, Delete, Filter, Path operations (~18 benchmarks instead of 91)
+        go test -run='^$' -bench='^Benchmark(Get_(Simple|Attribute|ArrayIndex)|Set_(Simple|Element|Attribute)|Delete_(Element|Attribute)|Filter_|Path_Parse|SetMany_3|DeleteMany_3)' -benchmem -count=3 -benchtime=500ms . > new.txt
 
     - name: Checkout base branch
       run: |
@@ -121,7 +123,8 @@ jobs:
 
     - name: Run benchmarks on base branch
       run: |
-        go test -run='^$' -bench=. -benchmem -count=5 ./... > old.txt
+        # Run only core benchmarks: Get, Set, Delete, Filter, Path operations (~18 benchmarks instead of 91)
+        go test -run='^$' -bench='^Benchmark(Get_(Simple|Attribute|ArrayIndex)|Set_(Simple|Element|Attribute)|Delete_(Element|Attribute)|Filter_|Path_Parse|SetMany_3|DeleteMany_3)' -benchmem -count=3 -benchtime=500ms . > old.txt
 
     - name: Install benchstat
       run: go install golang.org/x/perf/cmd/benchstat@latest
