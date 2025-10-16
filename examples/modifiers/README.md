@@ -161,8 +161,8 @@ Query → Result → @filter → @sort → @reverse → @first → Final Result
 
 Example execution:
 ```go
-"posts.post[views>100].title|@sort|@reverse|@first"
-// 1. Query: posts.post[views>100].title → ["Advanced Topics", "Best Practices"]
+"posts.post.#(views>100)#.title|@sort|@reverse|@first"
+// 1. Query: posts.post.#(views>100)#.title → ["Advanced Topics", "Best Practices"]
 // 2. @sort → ["Advanced Topics", "Best Practices"]
 // 3. @reverse → ["Best Practices", "Advanced Topics"]
 // 4. @first → "Best Practices"

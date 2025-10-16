@@ -932,9 +932,9 @@ result.ForEach(func(i int, r Result) bool {
 })
 ```
 
-### Multiple Filters (Chaining)
+### ⚠️ Chained Filters Limitation
 
-Combine multiple filter conditions by chaining:
+**Chained filters (e.g., `#(condition1).#(condition2)`) are NOT currently supported.**
 
 ```go
 xml := `
@@ -959,14 +959,25 @@ xml := `
     </employee>
 </employees>`
 
-// Multiple conditions: Engineering dept AND high salary
+// ❌ This does NOT work - chained filters not supported
 result := xmldot.Get(xml, "employees.employee.#(dept==Engineering).#(salary>90000).name")
-fmt.Println(result.String())  // → "Carol"
+fmt.Println(result.Exists())  // → false (doesn't work)
 
-// Age range using two filters
-result = xmldot.Get(xml, "employees.employee.#(age>30).#(age<45).name")
-fmt.Println(result.String())  // → "Bob"
+// ✅ Workaround: Use all-matches syntax and filter manually
+allEngineering := xmldot.Get(xml, "employees.employee.#(dept==Engineering)#")
+allEngineering.ForEach(func(i int, emp xmldot.Result) bool {
+    salary := xmldot.Get(emp.Raw, "salary")
+    if salary.Int() > 90000 {
+        name := xmldot.Get(emp.Raw, "name")
+        fmt.Println(name.String())  // → "Carol"
+    }
+    return true
+})
 ```
+
+**Why This Limitation Exists**: The current architecture applies filters to element arrays at the current nesting level. Chaining filters would require executing a second filter on the result of the first filter, which is architecturally different.
+
+**Future Support**: Chained filter support may be added in a future version (v2.0+) if there is sufficient user demand.
 
 ### Type Coercion Rules
 
@@ -998,9 +1009,6 @@ result := xmldot.Get(xml, "items.item.#(@id==5)")  // ~ 1-2µs
 
 // Medium: Numeric element filter
 result := xmldot.Get(xml, "items.item.#(price<100)")  // ~ 2-3µs
-
-// Slower: Multiple filters
-result := xmldot.Get(xml, "items.item.#(price<100).#(@status==active)")  // ~ 3-5µs
 
 // Slowest: Recursive wildcard + filter
 result := xmldot.Get(xml, "root.**.#(price<100)")  // ~ 5-20µs depending on depth
@@ -1053,9 +1061,17 @@ xml := `
 </catalog>`
 
 // Find in-stock electronics under $100
-affordable := xmldot.Get(xml,
-    "catalog.products.product.#(@category==electronics).#(price<100).#(stock>0).name")
-fmt.Println(affordable.String())  // → "Keyboard RGB"
+// Note: Chained filters not supported - use manual filtering
+affordable := xmldot.Get(xml, "catalog.products.product.#(@category==electronics)#")
+affordable.ForEach(func(i int, r xmldot.Result) bool {
+    price := xmldot.Get(r.Raw, "price")
+    stock := xmldot.Get(r.Raw, "stock")
+    if price.Float() < 100 && stock.Int() > 0 {
+        name := xmldot.Get(r.Raw, "name")
+        fmt.Println(name.String())  // → "Keyboard RGB"
+    }
+    return true
+})
 
 // Find highly-rated products (rating >= 4.5) with price
 highRated := xmldot.Get(xml, "catalog.products.product.#(rating>=4.5)#")
@@ -1671,11 +1687,22 @@ path := "store.departments.*.products.product.#(price<50)#.name|@sort"
 path := "root.**.#(@status==active)#"
 ```
 
-#### Example 4: Multiple Filters with Modifiers
+#### Example 4: Filter with Manual Iteration and Modifiers
 
 ```go
+// Note: Chained filters not supported - use manual filtering
 // Find Engineering employees earning over $80k, sorted by salary descending
-path := "company.employees.employee.#(dept==Engineering).#(salary>80000)#.name|@sort|@reverse"
+allEngineering := xmldot.Get(xml, "company.employees.employee.#(dept==Engineering)#")
+var names []string
+allEngineering.ForEach(func(i int, emp xmldot.Result) bool {
+    salary := xmldot.Get(emp.Raw, "salary")
+    if salary.Int() > 80000 {
+        name := xmldot.Get(emp.Raw, "name")
+        names = append(names, name.String())
+    }
+    return true
+})
+// Then sort names as needed
 ```
 
 ### Performance Optimization Tips

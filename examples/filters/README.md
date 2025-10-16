@@ -10,7 +10,7 @@
 - Use numeric comparisons (>, <, >=, <=)
 - Filter by string equality and inequality
 - Filter by XML attributes
-- Chain multiple filters for complex queries
+- Manual filtering for complex queries (chained filters not supported)
 - Combine filters with wildcards and modifiers
 - Handle empty filter results
 - Count filtered elements
@@ -83,9 +83,10 @@ Active employees: 4
 
 ### Filter Syntax
 
-Filters use bracket notation with comparison operators:
+Filters use GJSON-style syntax with comparison operators:
 ```
-element[condition]
+element.#(condition)     # First match
+element.#(condition)#    # All matches
 ```
 
 ### Comparison Operators
@@ -99,9 +100,8 @@ element[condition]
 
 ### Filter Types
 
-1. **Element filters**: `employee[age>30]`
-2. **Attribute filters**: `employee[@status==active]`
-3. **Chained filters**: `employee[@status==active][age>30]`
+1. **Element filters**: `employee.#(age>30)`
+2. **Attribute filters**: `employee.#(@status==active)`
 
 ### Type Coercion
 
@@ -119,7 +119,7 @@ The example demonstrates advanced filtering techniques:
 3. **Attribute Filter**: Use `@status` to filter by attribute value
 4. **Range Queries**: Use `>=` and `<` for salary ranges
 5. **Inequality**: Use `!=` to exclude departments
-6. **Multiple Filters**: Chain filters for AND logic
+6. **Manual Filtering**: Iterate and filter manually (chained filters not supported)
 7. **Filter with Iteration**: Process filtered results
 8. **Empty Results**: Handle queries with no matches
 9. **Filter with Modifiers**: Combine filters with sorting
@@ -128,10 +128,10 @@ The example demonstrates advanced filtering techniques:
 ## Common Pitfalls
 
 - **Pitfall**: Forgetting `@` prefix for attribute filters
-  - **Solution**: Use `[@attribute==value]`, not `[attribute==value]`
+  - **Solution**: Use `.#(@attribute==value)`, not `.#(attribute==value)`
 
-- **Pitfall**: Expecting OR logic with multiple filters
-  - **Solution**: Multiple filters use AND logic; for OR, use separate queries
+- **Pitfall**: Trying to chain filters like `.#(...)#(...)#`
+  - **Solution**: Chained filters NOT supported; use manual iteration with Get() on Result.Raw
 
 - **Pitfall**: Case sensitivity in string comparisons
   - **Solution**: Filters are case-sensitive; normalize data if needed

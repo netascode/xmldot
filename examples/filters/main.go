@@ -94,10 +94,19 @@ func main() {
 	}
 	fmt.Println()
 
-	// Example 6: Multiple filters (chained) - first match
-	fmt.Println("Example 6: Active Engineering employees over 30 (first match)")
-	result = xmldot.Get(employeesXML, "company.employees.employee.#(@status==active).#(department==Engineering).#(age>30).name")
-	fmt.Printf("  - %s\n", result.String())
+	// Example 6: Manual filtering (chained filters not supported)
+	fmt.Println("Example 6: Active Engineering employees over 30")
+	// Note: Chained filters like #(...)#(...)#(...) don't work - use manual filtering
+	activeEmps := xmldot.Get(employeesXML, "company.employees.employee.#(@status==active)#")
+	activeEmps.ForEach(func(index int, emp xmldot.Result) bool {
+		dept := xmldot.Get(emp.Raw, "department")
+		age := xmldot.Get(emp.Raw, "age")
+		if dept.String() == "Engineering" && age.Int() > 30 {
+			name := xmldot.Get(emp.Raw, "name")
+			fmt.Printf("  - %s\n", name.String())
+		}
+		return true
+	})
 	fmt.Println()
 
 	// Example 7: Filter with iteration - all matches
