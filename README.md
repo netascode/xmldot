@@ -12,6 +12,7 @@
 <a href="https://godoc.org/github.com/netascode/xmldot"><img src="https://img.shields.io/badge/api-reference-blue.svg?style=flat-square" alt="GoDoc"></a>
 <a href="https://goreportcard.com/report/github.com/netascode/xmldot"><img src="https://goreportcard.com/badge/github.com/netascode/xmldot?style=flat-square" alt="Go Report Card"></a>
 <a href="https://codecov.io/gh/netascode/xmldot"><img src="https://codecov.io/gh/netascode/xmldot/branch/main/graph/badge.svg?style=flat-square" alt="codecov"></a>
+<a href="https://netascode.github.io/xmldot-playground/"><img src="https://img.shields.io/badge/playground-try_online-green.svg?style=flat-square" alt="Playground"></a>
 </p>
 
 <h3 align="center">get and set xml values with dot notation</h3>
@@ -32,6 +33,18 @@ $ go get -u github.com/netascode/xmldot
 ```
 
 This will retrieve the library.
+
+## Try It Online
+
+**[🎮 Interactive Playground](https://netascode.github.io/xmldot-playground/)**
+
+Experiment with XMLDOT in your browser without installing anything. The playground lets you:
+- Test path queries against sample or custom XML
+- Explore filters, wildcards, and modifiers
+- See results in real-time
+- Learn the syntax interactively
+
+Perfect for learning or prototyping queries before using in code.
 
 ## Get a value
 
