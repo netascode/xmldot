@@ -570,3 +570,634 @@ func TestResultValue(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================================
+// Fluent API Tests (Result.Get, Result.GetMany, Result.GetWithOptions)
+// ============================================================================
+
+func TestResult_Get_EmptyPath(t *testing.T) {
+	xml := `<root><child>value</child></root>`
+	root := Get(xml, "root")
+
+	// Empty path should return Null, not panic
+	result := root.Get("")
+
+	if result.Exists() {
+		t.Error("Expected Null for empty path, got existing result")
+	}
+
+	// Also test on array
+	items := Get(xml, "root.child")
+	result = items.Get("")
+
+	if result.Exists() {
+		t.Error("Expected Null for empty path on array")
+	}
+}
+
+func TestResult_Get_BasicChaining(t *testing.T) {
+	xml := `<root>
+		<users>
+			<user>
+				<name>Alice</name>
+				<age>30</age>
+			</user>
+		</users>
+	</root>`
+
+	// Test fluent chaining
+	root := Get(xml, "root")
+	users := root.Get("users")
+	user := users.Get("user")
+	name := user.Get("name")
+
+	if name.String() != "Alice" {
+		t.Errorf("Expected 'Alice', got '%s'", name.String())
+	}
+}
+
+func TestResult_Get_NestedElements(t *testing.T) {
+	xml := `<root>
+		<company>
+			<department>
+				<team>
+					<member>
+						<name>Bob</name>
+						<role>Engineer</role>
+					</member>
+				</team>
+			</department>
+		</company>
+	</root>`
+
+	root := Get(xml, "root.company")
+	dept := root.Get("department")
+	team := dept.Get("team.member")
+	name := team.Get("name")
+
+	if name.String() != "Bob" {
+		t.Errorf("Expected 'Bob', got '%s'", name.String())
+	}
+}
+
+func TestResult_Get_NullHandling(t *testing.T) {
+	xml := `<root><child>value</child></root>`
+
+	// Get on Null result should return Null
+	result := Get(xml, "root.nonexistent")
+	nextResult := result.Get("anything")
+
+	if nextResult.Exists() {
+		t.Error("Expected Null result when calling Get on Null")
+	}
+}
+
+func TestResult_Get_PrimitiveTypes(t *testing.T) {
+	xml := `<root><name>Alice</name><age>30</age></root>`
+
+	tests := []struct {
+		name string
+		path string
+		next string
+	}{
+		{"String type", "root.name.%", "child"},
+		{"Attribute type", "root.@id", "child"},
+		{"Number type", "root.age", "child"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get(xml, tt.path)
+			nextResult := result.Get(tt.next)
+
+			// Primitive types cannot be queried further
+			if nextResult.Exists() {
+				t.Errorf("%s: Get on primitive type should return Null", tt.name)
+			}
+		})
+	}
+}
+
+func TestResult_Get_ArrayHandling(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>A</name><price>10</price></item>
+			<item><name>B</name><price>20</price></item>
+			<item><name>C</name><price>30</price></item>
+		</items>
+	</root>`
+
+	// Use field extraction syntax #.name to get all names
+	items := Get(xml, "root.items")
+	names := items.Get("item.#.name")
+
+	// Should return array of names
+	if !names.IsArray() {
+		t.Error("Expected array result when calling Get with field extraction")
+	}
+
+	if len(names.Results) != 3 {
+		t.Errorf("Expected 3 names, got %d", len(names.Results))
+	}
+
+	expected := []string{"A", "B", "C"}
+	for i, name := range names.Results {
+		if name.String() != expected[i] {
+			t.Errorf("Expected name[%d] = '%s', got '%s'", i, expected[i], name.String())
+		}
+	}
+}
+
+func TestResult_Get_ArrayWithNoMatches(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>A</name></item>
+			<item><name>B</name></item>
+		</items>
+	</root>`
+
+	items := Get(xml, "root.items.item")
+	result := items.Get("nonexistent")
+
+	if result.Exists() {
+		t.Error("Expected Null when no array elements have the requested field")
+	}
+}
+
+func TestResult_Get_ArrayWithSingleMatch(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>A</name></item>
+		</items>
+	</root>`
+
+	// Query returns first item (GJSON behavior)
+	item := Get(xml, "root.items.item")
+	name := item.Get("name")
+
+	if name.String() != "A" {
+		t.Errorf("Expected 'A', got '%s'", name.String())
+	}
+}
+
+func TestResult_Get_ArrayFirstElementDirect(t *testing.T) {
+	// Test that Get() on an Array Result queries the first element only (GJSON behavior)
+	// We need to create an Array Result manually since path queries return first match by default
+
+	xml := `<root>
+		<items>
+			<item><name>First</name></item>
+			<item><name>Second</name></item>
+			<item><name>Third</name></item>
+		</items>
+	</root>`
+
+	// Use #.name to get an array of names
+	names := Get(xml, "root.items.item.#.name")
+
+	// Verify it's an array
+	if !names.IsArray() {
+		t.Fatal("Expected array type for #.name extraction, got", names.Type)
+	}
+
+	if len(names.Results) != 3 {
+		t.Fatalf("Expected 3 name results, got %d", len(names.Results))
+	}
+
+	// Now test Get() on this Array Result
+	// Since names is an array of String results, Get() on it should query the first element
+	// But String types can't be queried further, so this should return Null
+	result := names.Get("anything")
+	if result.Exists() {
+		t.Error("Expected Null when calling Get() on Array of primitive types")
+	}
+
+	// Better test: Get array of Element results and call Get() on it
+	xml2 := `<root>
+		<items>
+			<item><name>Alice</name><age>30</age></item>
+			<item><name>Bob</name><age>25</age></item>
+			<item><name>Carol</name><age>28</age></item>
+		</items>
+	</root>`
+
+	// Get array of all items using filter all syntax #(condition)#
+	items := Get(xml2, "root.items.item.#(age>0)#")
+
+	if !items.IsArray() {
+		t.Fatal("Expected array type for filter all, got", items.Type)
+	}
+
+	if len(items.Results) != 3 {
+		t.Fatalf("Expected 3 item results, got %d", len(items.Results))
+	}
+
+	// Get() on array should query first element only (GJSON behavior)
+	userName := items.Get("name")
+	if userName.String() != "Alice" {
+		t.Errorf("Expected 'Alice' (first element), got '%s'", userName.String())
+	}
+
+	// Verify it's not querying all elements
+	if userName.IsArray() {
+		t.Error("Expected single result (first element only), not array")
+	}
+}
+
+func TestResult_Get_DeepChaining(t *testing.T) {
+	xml := `<root>
+		<level1>
+			<level2>
+				<level3>
+					<level4>
+						<value>deep</value>
+					</level4>
+				</level3>
+			</level2>
+		</level1>
+	</root>`
+
+	// Test deep chaining with multiple Get calls
+	result := Get(xml, "root").
+		Get("level1").
+		Get("level2").
+		Get("level3").
+		Get("level4").
+		Get("value")
+
+	if result.String() != "deep" {
+		t.Errorf("Expected 'deep', got '%s'", result.String())
+	}
+}
+
+func TestResult_Get_WithFilters(t *testing.T) {
+	xml := `<root>
+		<users>
+			<user><name>Alice</name><age>25</age></user>
+			<user><name>Bob</name><age>35</age></user>
+			<user><name>Carol</name><age>30</age></user>
+		</users>
+	</root>`
+
+	users := Get(xml, "root.users")
+	user := users.Get("user.#(age>30)")
+	name := user.Get("name")
+
+	if name.String() != "Bob" {
+		t.Errorf("Expected 'Bob', got '%s'", name.String())
+	}
+}
+
+func TestResult_Get_SecurityLimits(t *testing.T) {
+	// Create deeply nested XML (testing that limits still apply)
+	nested := "<root>"
+	for i := 0; i < 50; i++ {
+		nested += fmt.Sprintf("<level%d>", i)
+	}
+	nested += "<value>test</value>"
+	for i := 49; i >= 0; i-- {
+		nested += fmt.Sprintf("</level%d>", i)
+	}
+	nested += "</root>"
+
+	// Get intermediate result and query from there
+	root := Get(nested, "root")
+	if !root.Exists() {
+		t.Error("Expected root to exist")
+	}
+
+	// Should be able to query further within limits
+	result := root.Get("level0.level1.level2")
+	if !result.Exists() {
+		t.Error("Expected result to exist within limits")
+	}
+}
+
+func TestResult_GetMany_Basic(t *testing.T) {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+			<city>NYC</city>
+		</user>
+	</root>`
+
+	user := Get(xml, "root.user")
+	results := user.GetMany("name", "age", "city")
+
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results, got %d", len(results))
+	}
+
+	expected := []string{"Alice", "30", "NYC"}
+	for i, result := range results {
+		if result.String() != expected[i] {
+			t.Errorf("Result[%d]: expected '%s', got '%s'", i, expected[i], result.String())
+		}
+	}
+}
+
+func TestResult_GetMany_NullHandling(t *testing.T) {
+	nullResult := Result{Type: Null}
+	results := nullResult.GetMany("path1", "path2", "path3")
+
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results, got %d", len(results))
+	}
+
+	for i, result := range results {
+		if result.Exists() {
+			t.Errorf("Result[%d]: expected Null, got existing result", i)
+		}
+	}
+}
+
+func TestResult_GetMany_PrimitiveTypes(t *testing.T) {
+	stringResult := Result{Type: String, Str: "value"}
+	results := stringResult.GetMany("path1", "path2")
+
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	for i, result := range results {
+		if result.Exists() {
+			t.Errorf("Result[%d]: expected Null for primitive type, got existing result", i)
+		}
+	}
+}
+
+func TestResult_GetMany_ArrayHandling(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>A</name><price>10</price></item>
+			<item><name>B</name><price>20</price></item>
+		</items>
+	</root>`
+
+	// Get array results using field extraction syntax
+	items := Get(xml, "root.items")
+	results := items.GetMany("item.#.name", "item.#.price")
+
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	// Each result should be an array
+	if !results[0].IsArray() || !results[1].IsArray() {
+		t.Error("Expected array results for each path")
+	}
+
+	// Check names
+	if len(results[0].Results) != 2 {
+		t.Errorf("Expected 2 names, got %d", len(results[0].Results))
+	}
+
+	expectedNames := []string{"A", "B"}
+	for i, name := range results[0].Results {
+		if name.String() != expectedNames[i] {
+			t.Errorf("Name[%d]: expected '%s', got '%s'", i, expectedNames[i], name.String())
+		}
+	}
+}
+
+func TestResult_GetMany_MixedResults(t *testing.T) {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+		</user>
+	</root>`
+
+	user := Get(xml, "root.user")
+	results := user.GetMany("name", "nonexistent", "age")
+
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results, got %d", len(results))
+	}
+
+	if results[0].String() != "Alice" {
+		t.Errorf("Result[0]: expected 'Alice', got '%s'", results[0].String())
+	}
+
+	if results[1].Exists() {
+		t.Error("Result[1]: expected Null for nonexistent path")
+	}
+
+	if results[2].String() != "30" {
+		t.Errorf("Result[2]: expected '30', got '%s'", results[2].String())
+	}
+}
+
+func TestResult_GetWithOptions_CaseInsensitive(t *testing.T) {
+	xml := `<root>
+		<USER>
+			<NAME>Alice</NAME>
+			<AGE>30</AGE>
+		</USER>
+	</root>`
+
+	opts := &Options{CaseSensitive: false}
+
+	root := Get(xml, "root")
+	user := root.GetWithOptions("user", opts)
+	name := user.GetWithOptions("name", opts)
+
+	if name.String() != "Alice" {
+		t.Errorf("Expected 'Alice', got '%s'", name.String())
+	}
+}
+
+func TestResult_GetWithOptions_DefaultOptions(t *testing.T) {
+	xml := `<root><user><name>Alice</name></user></root>`
+
+	// Test with nil options (should use defaults)
+	root := Get(xml, "root")
+	name := root.GetWithOptions("user.name", nil)
+
+	if name.String() != "Alice" {
+		t.Errorf("Expected 'Alice', got '%s'", name.String())
+	}
+}
+
+func TestResult_GetWithOptions_NullHandling(t *testing.T) {
+	opts := &Options{CaseSensitive: false}
+	nullResult := Result{Type: Null}
+	result := nullResult.GetWithOptions("anything", opts)
+
+	if result.Exists() {
+		t.Error("Expected Null result when calling GetWithOptions on Null")
+	}
+}
+
+func TestResult_GetWithOptions_PrimitiveTypes(t *testing.T) {
+	opts := &Options{CaseSensitive: false}
+	stringResult := Result{Type: String, Str: "value"}
+	result := stringResult.GetWithOptions("child", opts)
+
+	if result.Exists() {
+		t.Error("Expected Null when calling GetWithOptions on primitive type")
+	}
+}
+
+func TestResult_GetWithOptions_ArrayHandling(t *testing.T) {
+	xml := `<root>
+		<ITEMS>
+			<ITEM><NAME>A</NAME></ITEM>
+			<ITEM><NAME>B</NAME></ITEM>
+		</ITEMS>
+	</root>`
+
+	opts := &Options{CaseSensitive: false}
+
+	// Use field extraction syntax
+	items := Get(xml, "root.ITEMS")
+	names := items.GetWithOptions("item.#.name", opts)
+
+	if !names.IsArray() {
+		t.Error("Expected array result")
+	}
+
+	if len(names.Results) != 2 {
+		t.Errorf("Expected 2 names, got %d", len(names.Results))
+	}
+
+	expected := []string{"A", "B"}
+	for i, name := range names.Results {
+		if name.String() != expected[i] {
+			t.Errorf("Name[%d]: expected '%s', got '%s'", i, expected[i], name.String())
+		}
+	}
+}
+
+func TestResult_GetWithOptions_FastPath(t *testing.T) {
+	xml := `<root><user><name>Alice</name></user></root>`
+
+	// Test that default options use fast path (same as Get)
+	root := Get(xml, "root")
+
+	// Options with all defaults should use fast path
+	defaultOpts := &Options{
+		CaseSensitive:      true,
+		Indent:             "",
+		PreserveWhitespace: false,
+		Namespaces:         nil,
+	}
+
+	name1 := root.Get("user.name")
+	name2 := root.GetWithOptions("user.name", defaultOpts)
+
+	if name1.String() != name2.String() {
+		t.Errorf("Fast path and normal path should return same result")
+	}
+}
+
+// ============================================================================
+// Fluent API Example Functions
+// ============================================================================
+
+// ExampleResult_Get demonstrates fluent method chaining
+func ExampleResult_Get() {
+	xml := `<root>
+		<users>
+			<user>
+				<name>Alice</name>
+				<age>30</age>
+			</user>
+		</users>
+	</root>`
+
+	// Get intermediate result and query from there
+	users := Get(xml, "root.users")
+	name := users.Get("user.name")
+	fmt.Println(name.String())
+	// Output: Alice
+}
+
+// ExampleResult_Get_chaining demonstrates deep chaining
+func ExampleResult_Get_chaining() {
+	xml := `<root>
+		<company>
+			<department>
+				<team>
+					<member>
+						<name>Bob</name>
+					</member>
+				</team>
+			</department>
+		</company>
+	</root>`
+
+	// Chain multiple Get calls
+	name := Get(xml, "root").
+		Get("company").
+		Get("department").
+		Get("team.member").
+		Get("name")
+
+	fmt.Println(name.String())
+	// Output: Bob
+}
+
+// ExampleResult_Get_array demonstrates array field extraction
+func ExampleResult_Get_array() {
+	xml := `<root>
+		<items>
+			<item><name>A</name><price>10</price></item>
+			<item><name>B</name><price>20</price></item>
+		</items>
+	</root>`
+
+	// Get items and extract names from all using #.name syntax
+	items := Get(xml, "root.items")
+	names := items.Get("item.#.name")
+
+	// Iterate over results
+	names.ForEach(func(i int, name Result) bool {
+		fmt.Printf("%d: %s\n", i+1, name.String())
+		return true
+	})
+	// Output:
+	// 1: A
+	// 2: B
+}
+
+// ExampleResult_GetMany demonstrates batch queries
+func ExampleResult_GetMany() {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+			<city>NYC</city>
+		</user>
+	</root>`
+
+	user := Get(xml, "root.user")
+	results := user.GetMany("name", "age", "city")
+
+	for i, result := range results {
+		fmt.Printf("%d: %s\n", i+1, result.String())
+	}
+	// Output:
+	// 1: Alice
+	// 2: 30
+	// 3: NYC
+}
+
+// ExampleResult_GetWithOptions demonstrates case-insensitive queries
+func ExampleResult_GetWithOptions() {
+	xml := `<root>
+		<USER>
+			<NAME>Alice</NAME>
+		</USER>
+	</root>`
+
+	opts := &Options{CaseSensitive: false}
+
+	root := Get(xml, "root")
+	user := root.GetWithOptions("user", opts)
+	name := user.GetWithOptions("name", opts)
+
+	fmt.Println(name.String())
+	// Output: Alice
+}

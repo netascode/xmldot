@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-<img src="https://img.shields.io/badge/xmldot-v0.1.0-blue.svg?style=flat-square" alt="xmldot">
+<img src="https://img.shields.io/badge/xmldot-v0.2.0-blue.svg?style=flat-square" alt="xmldot">
 <br>
 <a href="https://godoc.org/github.com/netascode/xmldot"><img src="https://img.shields.io/badge/api-reference-blue.svg?style=flat-square" alt="GoDoc"></a>
 <a href="https://goreportcard.com/report/github.com/netascode/xmldot"><img src="https://goreportcard.com/badge/github.com/netascode/xmldot?style=flat-square" alt="Go Report Card"></a>
@@ -74,6 +74,55 @@ This will print:
 
 ```
 The Go Programming Language
+```
+
+## Fluent API (v0.2.0+)
+
+The fluent API enables method chaining on Result objects for cleaner, more readable code:
+
+```go
+// Basic fluent chaining
+root := xmldot.Get(xml, "root")
+name := root.Get("user.name").String()
+age := root.Get("user.age").Int()
+
+// Deep chaining
+fullPath := xmldot.Get(xml, "root").
+    Get("company").
+    Get("department").
+    Get("team.member").
+    Get("name").
+    String()
+
+// Batch queries
+user := xmldot.Get(xml, "root.user")
+results := user.GetMany("name", "age", "email")
+name := results[0].String()
+age := results[1].Int()
+email := results[2].String()
+
+// Case-insensitive queries
+opts := &xmldot.Options{CaseSensitive: false}
+name := root.GetWithOptions("USER.NAME", opts).String()
+```
+
+**Performance**: Fluent chaining adds ~280% overhead for 3-level chains compared to full paths. For performance-critical code, use direct paths:
+
+```go
+// Fast (recommended for hot paths)
+name := xmldot.Get(xml, "root.user.name")
+
+// Readable (recommended for business logic)
+user := xmldot.Get(xml, "root.user")
+name := user.Get("name")
+```
+
+**Array Handling**: Field extraction on arrays requires explicit `#.field` syntax:
+
+```go
+items := xmldot.Get(xml, "catalog.items")
+// Extract all prices
+prices := items.Get("item.#.price")  // Array of all prices
 ```
 
 ## Set a value

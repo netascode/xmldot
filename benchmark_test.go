@@ -644,3 +644,148 @@ func BenchmarkDeleteMany_Scale10K(b *testing.B) {
 		_, _ = DeleteMany(xml, paths...)
 	}
 }
+
+// ============================================================================
+// Fluent API Benchmarks (Result.Get, Result.GetMany, Result.GetWithOptions)
+// ============================================================================
+
+// BenchmarkResultGet_Simple benchmarks simple fluent Get chaining
+func BenchmarkResultGet_Simple(b *testing.B) {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+		</user>
+	</root>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		root := Get(xml, "root")
+		user := root.Get("user")
+		_ = user.Get("name")
+	}
+}
+
+// BenchmarkResultGet_Deep benchmarks deep chaining (5 levels)
+func BenchmarkResultGet_Deep(b *testing.B) {
+	xml := `<root>
+		<level1>
+			<level2>
+				<level3>
+					<level4>
+						<level5>
+							<value>test</value>
+						</level5>
+					</level4>
+				</level3>
+			</level2>
+		</level1>
+	</root>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result := Get(xml, "root").
+			Get("level1").
+			Get("level2").
+			Get("level3").
+			Get("level4").
+			Get("level5").
+			Get("value")
+		_ = result.String()
+	}
+}
+
+// BenchmarkResultGet_FieldExtraction benchmarks fluent field extraction
+func BenchmarkResultGet_FieldExtraction(b *testing.B) {
+	xml := `<root>
+		<items>
+			<item><name>A</name></item>
+			<item><name>B</name></item>
+			<item><name>C</name></item>
+		</items>
+	</root>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		items := Get(xml, "root.items")
+		names := items.Get("item.#.name")
+		_ = names.IsArray()
+	}
+}
+
+// BenchmarkResultGetMany benchmarks GetMany batch queries
+func BenchmarkResultGetMany(b *testing.B) {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+			<city>NYC</city>
+			<country>USA</country>
+			<email>alice@example.com</email>
+		</user>
+	</root>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		user := Get(xml, "root.user")
+		results := user.GetMany("name", "age", "city", "country", "email")
+		_ = results[0].String()
+	}
+}
+
+// BenchmarkResultGetWithOptions benchmarks GetWithOptions with case-insensitive
+func BenchmarkResultGetWithOptions(b *testing.B) {
+	xml := `<root>
+		<USER>
+			<NAME>Alice</NAME>
+			<AGE>30</AGE>
+		</USER>
+	</root>`
+
+	opts := &Options{CaseSensitive: false}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		root := Get(xml, "root")
+		user := root.GetWithOptions("user", opts)
+		_ = user.GetWithOptions("name", opts)
+	}
+}
+
+// BenchmarkResultGet_vs_DirectGet compares fluent vs direct Get performance
+func BenchmarkResultGet_vs_DirectGet(b *testing.B) {
+	xml := `<root>
+		<user>
+			<profile>
+				<name>Alice</name>
+			</profile>
+		</user>
+	</root>`
+
+	b.Run("Fluent", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			root := Get(xml, "root")
+			user := root.Get("user")
+			profile := user.Get("profile")
+			_ = profile.Get("name")
+		}
+	})
+
+	b.Run("Direct", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = Get(xml, "root.user.profile.name")
+		}
+	})
+}
+
+// BenchmarkResultGet_LargeXML benchmarks fluent API on large XML
+func BenchmarkResultGet_LargeXML(b *testing.B) {
+	// largeXML has 100 items
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		root := Get(largeXML, "root")
+		items := root.Get("items")
+		item := items.Get("item.0")
+		_ = item.Get("name")
+	}
+}

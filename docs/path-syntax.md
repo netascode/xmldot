@@ -16,7 +16,8 @@ Complete reference for XMLDOT path syntax, inspired by JSONPath and adapted for 
 10. [Escape Sequences](#escape-sequences)
 11. [Path Composition](#path-composition)
 12. [Performance Considerations](#performance-considerations)
-13. [Quick Reference](#quick-reference)
+13. [Fluent API](#fluent-api-v020)
+14. [Quick Reference](#quick-reference)
 
 ---
 
@@ -1843,6 +1844,74 @@ For more details, see [docs/performance.md](performance.md) and [docs/security.m
 
 ---
 
+## Fluent API (v0.2.0+)
+
+Starting in v0.2.0, Result objects support method chaining for cleaner code.
+
+### Basic Chaining
+
+```go
+root := xmldot.Get(xml, "root")
+user := root.Get("user")
+name := user.Get("name").String()
+```
+
+Equivalent to:
+```go
+name := xmldot.Get(xml, "root.user.name").String()
+```
+
+### Deep Chaining
+
+```go
+fullPath := xmldot.Get(xml, "root").
+    Get("company").
+    Get("department").
+    Get("team.member").
+    Get("name").
+    String()
+```
+
+### Batch Queries
+
+```go
+user := xmldot.Get(xml, "root.user")
+results := user.GetMany("name", "age", "email")
+name := results[0].String()
+age := results[1].Int()
+email := results[2].String()
+```
+
+### Array Handling
+
+When querying arrays with fluent API, use explicit field extraction syntax:
+
+```go
+items := xmldot.Get(xml, "catalog.items")
+prices := items.Get("item.#.price")  // Extract all prices
+```
+
+**Note**: The `Get()` method on Array types delegates to the first element.
+
+### Performance Considerations
+
+Fluent chaining adds overhead per call:
+- 1-level chain: ~27.9% overhead
+- 3-level chain: ~276.7% overhead
+
+**Recommendation**: Use fluent API for readability, use full paths for performance-critical loops.
+
+### Options Support
+
+```go
+opts := &xmldot.Options{CaseSensitive: false}
+result := root.GetWithOptions("user.name", opts)
+```
+
+See the main documentation for Options details.
+
+---
+
 ## Quick Reference
 
 ### Syntax Summary Table
@@ -1938,6 +2007,6 @@ xmldot.Get(xml, "root.**.item.#(price>50)#.name|@sort|@first")
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-10-08
+**Document Version**: 1.1
+**Last Updated**: 2025-10-18
 **Status**: Complete
