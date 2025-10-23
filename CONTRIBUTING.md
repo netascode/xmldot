@@ -72,6 +72,36 @@ make bench
 
 ## Coding Guidelines
 
+### License Headers
+
+The project uses [Google's addlicense](https://github.com/google/addlicense) tool for license header management.
+
+**Install addlicense:**
+```bash
+go install github.com/google/addlicense@v1.1.1
+# Or use: make tools
+```
+
+**Version Note**: Use the exact version shown above (`@v1.1.1`) to match the CI environment. Using `@latest` may cause version mismatches between local development and CI checks.
+
+**Verify headers:**
+```bash
+make check-license
+```
+
+**Important Notes:**
+- **For Maintainers**: Use `make license` to add headers with project default copyright holder (Daniel Schmidt)
+- **For Contributors**: Do NOT use `make license` - it will overwrite copyright holder with the project default
+- **For Contributors**: Manually add headers to new files with YOUR organization's copyright:
+  ```go
+  // SPDX-License-Identifier: MIT
+  // Copyright (c) 2025 Your Organization Name
+
+  package xmldot
+  ```
+- Then run `make check-license` to verify format compliance (accepts any copyright holder)
+- Both SPDX-first and Copyright-first formats are accepted by the check command
+
 ### Go Code Style
 
 - Follow [Effective Go](https://go.dev/doc/effective_go)

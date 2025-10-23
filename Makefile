@@ -1,4 +1,4 @@
-.PHONY: help test bench coverage lint fmt vet clean
+.PHONY: help test bench coverage lint fmt vet clean tools license check-license ci verify test-short race-test bench-compare coverage-func tidy profile-cpu profile-mem deps
 
 # Default target
 .DEFAULT_GOAL := help
@@ -68,12 +68,48 @@ clean: ## Clean build artifacts
 	rm -f coverage.txt coverage.out coverage.html
 	rm -f old.txt new.txt
 
-ci: fmt vet lint test ## Run all CI checks
+ci: fmt vet lint test check-license ## Run all CI checks
 
-install-tools: ## Install development tools
+tools: ## Install development tools
 	@echo "Installing development tools..."
-	$(GOGET) golang.org/x/perf/cmd/benchstat
-	@echo "Tools installed successfully"
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.5.0
+	go install github.com/google/addlicense@v1.1.1
+	go install golang.org/x/perf/cmd/benchstat@latest
+
+# Add license headers to all Go files
+# Uses Google's addlicense tool (github.com/google/addlicense)
+# Existing headers are preserved (no re-processing)
+# Note: Requires addlicense in PATH or ~/go/bin - install with 'make tools'
+license: ## Add MIT license headers to Go files (maintainers only)
+	@echo "Adding license headers to Go files..."
+	@if [ -z "$(HOME)" ] || [ ! -d "$(HOME)" ]; then \
+		echo "Error: Invalid HOME directory (required for ~/go/bin tool installation)"; \
+		echo "       If running in Docker/container, ensure HOME is set and ~/go/bin exists"; exit 1; \
+	fi
+	@PATH="$(HOME)/go/bin:$$PATH" && \
+	command -v addlicense >/dev/null 2>&1 || { echo "Error: addlicense not found. Install with: make tools"; exit 1; } && \
+	find . -name "*.go" -not -path "./vendor/*" -not -path "./examples/*" -print0 | \
+		xargs -0 addlicense -c "Daniel Schmidt" -l mit -s=only -y 2025 -v
+	@echo "License header addition complete!"
+
+# Check that all Go files have license headers
+# Uses addlicense in check mode - accepts ANY copyright holder name
+# Only verifies that MIT + SPDX headers exist
+# Note: Requires addlicense in PATH or ~/go/bin - install with 'make tools'
+check-license: ## Check that all Go files have license headers
+	@echo "Checking license headers..."
+	@if [ -z "$(HOME)" ] || [ ! -d "$(HOME)" ]; then \
+		echo "Error: Invalid HOME directory (required for ~/go/bin tool installation)"; \
+		echo "       If running in Docker/container, ensure HOME is set and ~/go/bin exists"; exit 1; \
+	fi
+	@PATH="$(HOME)/go/bin:$$PATH" && \
+	command -v addlicense >/dev/null 2>&1 || { echo "Error: addlicense not found. Install with: make tools"; exit 1; } && \
+	find . -name "*.go" -not -path "./vendor/*" -not -path "./examples/*" -print0 | \
+		if xargs -0 addlicense -check -l mit -s=only -y 2025; then \
+			echo "✓ All Go files have license headers!"; \
+		else \
+			echo "✗ Some files are missing license headers. Run 'make license' to add them."; exit 1; \
+		fi
 
 profile-cpu: ## Run CPU profiling
 	$(GOTEST) -run='^$$' -bench=. -benchmem -cpuprofile=cpu.prof ./...
@@ -86,5 +122,9 @@ profile-mem: ## Run memory profiling
 deps: ## Download dependencies
 	$(GOMOD) download
 
-verify: ## Verify dependencies
+# Verify dependencies and license headers
+verify: ## Verify dependencies and license headers
+	@echo "Verifying dependencies..."
 	$(GOMOD) verify
+	@echo "Checking license headers..."
+	@$(MAKE) check-license
