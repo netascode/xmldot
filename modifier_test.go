@@ -646,6 +646,108 @@ func TestModifierPretty_InvalidXML(t *testing.T) {
 	}
 }
 
+// @pretty xmlns Tests - Regression tests for duplicate xmlns bug fix
+
+func TestModifierPretty_SingleNamespace(t *testing.T) {
+	input := Result{
+		Type: Element,
+		Raw:  `<native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"><cdp xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cdp"><holdtime>15</holdtime></cdp></native>`,
+		Str:  "",
+	}
+
+	mod := GetModifier("pretty")
+	result := mod.Apply(input)
+
+	// Each namespace should appear exactly once
+	nativeCount := strings.Count(result.Raw, `xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"`)
+	cdpCount := strings.Count(result.Raw, `xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cdp"`)
+
+	if nativeCount != 1 {
+		t.Errorf("Expected 1 occurrence of native namespace, got %d. Output:\n%s", nativeCount, result.Raw)
+	}
+	if cdpCount != 1 {
+		t.Errorf("Expected 1 occurrence of cdp namespace, got %d. Output:\n%s", cdpCount, result.Raw)
+	}
+}
+
+func TestModifierPretty_DuplicateXmlnsInInput(t *testing.T) {
+	// Input already has duplicate xmlns on same element
+	input := Result{
+		Type: Element,
+		Raw:  `<native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"><cdp><holdtime xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cdp" xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cdp">15</holdtime></cdp></native>`,
+		Str:  "",
+	}
+
+	mod := GetModifier("pretty")
+	result := mod.Apply(input)
+
+	// Should deduplicate the xmlns on holdtime element
+	holdtimeXmlnsCount := 0
+	// Find the holdtime opening tag and count xmlns in it
+	start := strings.Index(result.Raw, "<holdtime")
+	if start != -1 {
+		end := strings.Index(result.Raw[start:], ">")
+		if end != -1 {
+			holdtimeTag := result.Raw[start : start+end+1]
+			holdtimeXmlnsCount = strings.Count(holdtimeTag, `xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cdp"`)
+		}
+	}
+
+	if holdtimeXmlnsCount != 1 {
+		t.Errorf("Expected 1 xmlns in <holdtime> tag, got %d. Output:\n%s", holdtimeXmlnsCount, result.Raw)
+	}
+}
+
+func TestModifierPretty_MultipleNamespaces(t *testing.T) {
+	input := Result{
+		Type: Element,
+		Raw:  `<root xmlns="http://example.com/ns1"><child1 xmlns="http://example.com/ns2"><child2>value</child2></child1></root>`,
+		Str:  "value",
+	}
+
+	mod := GetModifier("pretty")
+	result := mod.Apply(input)
+
+	// Each namespace should appear exactly once
+	ns1Count := strings.Count(result.Raw, `xmlns="http://example.com/ns1"`)
+	ns2Count := strings.Count(result.Raw, `xmlns="http://example.com/ns2"`)
+
+	if ns1Count != 1 {
+		t.Errorf("Expected 1 occurrence of ns1, got %d. Output:\n%s", ns1Count, result.Raw)
+	}
+	if ns2Count != 1 {
+		t.Errorf("Expected 1 occurrence of ns2, got %d. Output:\n%s", ns2Count, result.Raw)
+	}
+
+	// Should still format with proper indentation
+	if !strings.Contains(result.Raw, "  ") {
+		t.Error("Expected indentation in pretty output")
+	}
+}
+
+func TestModifierPretty_NetconfExample(t *testing.T) {
+	// Real-world NETCONF example that triggered the bug
+	input := Result{
+		Type: Element,
+		Raw:  `<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><edit-config><config><native xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"><cdp operation="remove"></cdp></native></config></edit-config></rpc>`,
+		Str:  "",
+	}
+
+	mod := GetModifier("pretty")
+	result := mod.Apply(input)
+
+	// Check that each xmlns declaration appears only once
+	netconfNsCount := strings.Count(result.Raw, `xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"`)
+	nativeNsCount := strings.Count(result.Raw, `xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"`)
+
+	if netconfNsCount != 1 {
+		t.Errorf("Expected 1 occurrence of netconf namespace, got %d. Output:\n%s", netconfNsCount, result.Raw)
+	}
+	if nativeNsCount != 1 {
+		t.Errorf("Expected 1 occurrence of native namespace, got %d. Output:\n%s", nativeNsCount, result.Raw)
+	}
+}
+
 // @ugly Tests (4 tests)
 
 func TestModifierUgly_CompactXML(t *testing.T) {

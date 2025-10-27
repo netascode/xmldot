@@ -382,6 +382,34 @@ func (m *prettyModifier) Apply(r Result) Result {
 			return r
 		}
 
+		// Fix duplicate xmlns by clearing Name.Space on StartElement and EndElement tokens
+		// xml.Decoder sets both Name.Space (to the namespace URI) and adds xmlns attributes
+		// xml.Encoder sees Name.Space is set and adds xmlns again, causing duplicates
+		// Solution: Clear namespace from both start and end elements since xmlns attrs preserve it
+		if startElem, ok := token.(xml.StartElement); ok {
+			// Deduplicate xmlns attributes first
+			dedupedAttrs := deduplicateXmlnsAttrs(startElem.Attr)
+
+			// Create a completely new StartElement with cleared namespace
+			newStartElem := xml.StartElement{
+				Name: xml.Name{
+					Space: "", // Clear namespace to prevent encoder from adding xmlns
+					Local: startElem.Name.Local,
+				},
+				Attr: dedupedAttrs,
+			}
+
+			token = newStartElem
+		} else if endElem, ok := token.(xml.EndElement); ok {
+			// Also clear namespace from end elements to match the cleared start elements
+			token = xml.EndElement{
+				Name: xml.Name{
+					Space: "",
+					Local: endElem.Name.Local,
+				},
+			}
+		}
+
 		if err := encoder.EncodeToken(token); err != nil {
 			return r
 		}
@@ -398,6 +426,46 @@ func (m *prettyModifier) Apply(r Result) Result {
 		Raw:  buf.String(),
 		Num:  r.Num,
 	}
+}
+
+// deduplicateXmlnsAttrs removes duplicate xmlns namespace declarations from attributes.
+// Keeps the first occurrence of each unique xmlns declaration.
+func deduplicateXmlnsAttrs(attrs []xml.Attr) []xml.Attr {
+	if len(attrs) <= 1 {
+		return attrs
+	}
+
+	seen := make(map[string]bool)
+	result := make([]xml.Attr, 0, len(attrs))
+
+	for _, attr := range attrs {
+		// Create a unique key for xmlns attributes
+		// xmlns attributes have either:
+		// - Name.Local = "xmlns" (default namespace)
+		// - Name.Space = "xmlns" and Name.Local = prefix (prefixed namespace)
+		var key string
+		if attr.Name.Local == "xmlns" && attr.Name.Space == "" {
+			// Default namespace: xmlns="..."
+			key = "xmlns=" + attr.Value
+		} else if attr.Name.Space == "xmlns" {
+			// Prefixed namespace: xmlns:prefix="..."
+			key = "xmlns:" + attr.Name.Local + "=" + attr.Value
+		} else {
+			// Regular attribute - use name only
+			if attr.Name.Space != "" {
+				key = attr.Name.Space + ":" + attr.Name.Local
+			} else {
+				key = attr.Name.Local
+			}
+		}
+
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, attr)
+		}
+	}
+
+	return result
 }
 
 // uglyModifier compacts XML (removes whitespace)
