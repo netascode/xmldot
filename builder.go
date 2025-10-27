@@ -110,9 +110,8 @@ func (b *xmlBuilder) setElement(path []PathSegment, value interface{}) error {
 		parser := newXMLParser(b.data)
 		location, found := b.findElementLocation(parser, elementPath, 0, 0)
 		if !found {
-			// Parent element doesn't exist - need to create it
-			// For now, return error (Phase 3 can handle creation)
-			return fmt.Errorf("%w: parent element not found for attribute %s", ErrInvalidPath, attrName)
+			// Parent element doesn't exist - create it with the attribute
+			return b.createElementForAttribute(elementPath, path[len(path)-1], xmlValue)
 		}
 
 		// Modify the attribute
@@ -537,6 +536,59 @@ func (b *xmlBuilder) createInParent(parentLocation *elementLocation, remainingPa
 	}
 
 	return nil
+}
+
+// createElementForAttribute creates an element chain when setting an attribute
+// on a non-existent path. It creates the parent element first, then sets the attribute.
+//
+// This is a two-step process:
+//  1. Create the element chain (empty elements)
+//  2. Set the attribute on the newly created element
+//
+// Example:
+//
+//	Path: "root.user.@id" with value "123"
+//	Result: <root><user id="123"></user></root>
+//
+// Security Considerations:
+//
+// This function reuses createElement() and replaceAttribute(), inheriting their
+// security protections including MaxPathSegments, MaxDocumentSize, MaxAttributes,
+// and proper XML escaping.
+func (b *xmlBuilder) createElementForAttribute(elementPath []PathSegment, attrSeg PathSegment, attrValue string) error {
+	// Security check: Validate we're creating an attribute
+	if attrSeg.Type != SegmentAttribute {
+		return fmt.Errorf("%w: expected attribute segment", ErrInvalidPath)
+	}
+
+	// Step 1: Create empty parent element chain
+	if err := b.createElement(elementPath, "", false); err != nil {
+		return fmt.Errorf("failed to create parent element: %w", err)
+	}
+
+	// Step 2: Capture intermediate result
+	intermediateXML := b.getResult()
+
+	// Security check: Validate intermediate result size
+	if len(intermediateXML) > MaxDocumentSize {
+		return fmt.Errorf("%w: intermediate result exceeds maximum document size", ErrMalformedXML)
+	}
+
+	// Step 3: Reset builder state with new XML
+	b.data = []byte(intermediateXML)
+	b.result.Reset()
+	b.pos = 0
+
+	// Step 4: Find the newly created element
+	parser := newXMLParser(b.data)
+	location, found := b.findElementLocation(parser, elementPath, 0, 0)
+	if !found {
+		// This should never happen - we just created the element
+		return fmt.Errorf("%w: failed to locate created element for attribute", ErrInvalidPath)
+	}
+
+	// Step 5: Set the attribute on the created element
+	return b.replaceAttribute(location, attrSeg.Value, attrValue)
 }
 
 // buildElementPath builds a chain of nested elements

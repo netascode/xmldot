@@ -5,6 +5,7 @@ package xmldot
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,147 @@ func TestSet_ElementCreation(t *testing.T) {
 				t.Errorf("Set() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+// Test attribute creation on non-existent elements (v0.3.0 feature)
+func TestSet_AttributeCreation(t *testing.T) {
+	tests := []struct {
+		name     string
+		xml      string
+		path     string
+		value    interface{}
+		expected string
+	}{
+		{
+			name:     "create attribute on missing single element",
+			xml:      `<root></root>`,
+			path:     "root.user.@id",
+			value:    "123",
+			expected: `<root><user id="123"></user></root>`,
+		},
+		{
+			name:     "create attribute on missing nested path",
+			xml:      `<root></root>`,
+			path:     "root.a.b.c.@id",
+			value:    "deep",
+			expected: `<root><a><b><c id="deep"></c></b></a></root>`,
+		},
+		{
+			name:     "create attribute in self-closing root",
+			xml:      `<root/>`,
+			path:     "root.user.@active",
+			value:    "true",
+			expected: `<root><user active="true"></user></root>`,
+		},
+		{
+			name:     "create attribute with special characters",
+			xml:      `<root></root>`,
+			path:     "root.item.@value",
+			value:    `"test"`,
+			expected: `<root><item value="&quot;test&quot;"></item></root>`,
+		},
+		{
+			name:     "create attribute with partial existing path",
+			xml:      `<root><user></user></root>`,
+			path:     "root.user.contact.@email",
+			value:    "test@example.com",
+			expected: `<root><user><contact email="test@example.com"></contact></user></root>`,
+		},
+		{
+			name:     "create attribute with empty value",
+			xml:      `<root></root>`,
+			path:     "root.item.@flag",
+			value:    "",
+			expected: `<root><item flag=""></item></root>`,
+		},
+		{
+			name:     "create attribute with numeric value",
+			xml:      `<root></root>`,
+			path:     "root.item.@count",
+			value:    42,
+			expected: `<root><item count="42"></item></root>`,
+		},
+		{
+			name:     "create attribute on root element",
+			xml:      `<root></root>`,
+			path:     "root.@version",
+			value:    "1.0",
+			expected: `<root version="1.0"></root>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set(tt.xml, tt.path, tt.value)
+			if err != nil {
+				t.Fatalf("Set() error = %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("Set() = %v, want %v", result, tt.expected)
+			}
+
+			// Verify attribute was set correctly by reading it back
+			attrResult := Get(result, tt.path)
+			if !attrResult.Exists() {
+				t.Errorf("Attribute not found after Set()")
+			}
+			expectedValue := fmt.Sprintf("%v", tt.value)
+			if attrResult.String() != expectedValue {
+				t.Errorf("Get() after Set() = %v, want %v", attrResult.String(), expectedValue)
+			}
+		})
+	}
+}
+
+// Test multiple attributes on created elements
+func TestSet_AttributeCreationMultiple(t *testing.T) {
+	xml := `<root></root>`
+
+	// Create first attribute (creates element)
+	result, err := Set(xml, "root.user.@id", "123")
+	if err != nil {
+		t.Fatalf("First Set() error = %v", err)
+	}
+
+	// Verify element was created
+	if !strings.Contains(result, `<user id="123">`) {
+		t.Errorf("First attribute not created correctly: %s", result)
+	}
+
+	// Create second attribute (element already exists)
+	result, err = Set(result, "root.user.@name", "test")
+	if err != nil {
+		t.Fatalf("Second Set() error = %v", err)
+	}
+
+	// Verify both attributes exist (alphabetically sorted)
+	if !strings.Contains(result, `id="123"`) {
+		t.Errorf("First attribute lost: %s", result)
+	}
+	if !strings.Contains(result, `name="test"`) {
+		t.Errorf("Second attribute not added: %s", result)
+	}
+}
+
+// Test attribute creation preserves existing structure
+func TestSet_AttributeCreationPreservesStructure(t *testing.T) {
+	xml := `<root><existing><data>value</data></existing></root>`
+
+	result, err := Set(xml, "root.new.@attr", "test")
+	if err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	// Verify new element with attribute was added
+	if !strings.Contains(result, `<new attr="test">`) {
+		t.Errorf("New element not created: %s", result)
+	}
+
+	// Verify existing structure is preserved
+	existingValue := Get(result, "root.existing.data")
+	if existingValue.String() != "value" {
+		t.Errorf("Existing data corrupted: got %v, want 'value'", existingValue.String())
 	}
 }
 

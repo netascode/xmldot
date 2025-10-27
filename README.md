@@ -154,6 +154,24 @@ This will print:
 <catalog><book id="1"><title>The Go Programming Language</title><price>39.99</price></book></catalog>
 ```
 
+### Creating Elements with Attributes (v0.3.0+)
+
+Starting from v0.3.0, Set automatically creates missing parent elements when setting attributes. This makes it easy to add attributes to elements that don't yet exist:
+
+```go
+xml := `<root></root>`
+
+// Automatically creates <user> element with id attribute
+result, _ := xmldot.Set(xml, "root.user.@id", "123")
+// Result: <root><user id="123"></user></root>
+
+// Works with deep paths too
+result, _ = xmldot.Set(xml, "root.company.department.@name", "Engineering")
+// Result: <root><company><department name="Engineering"></department></company></root>
+```
+
+Before v0.3.0, setting an attribute on a non-existent element would return an error. Now the element is automatically created.
+
 ## Path Syntax
 
 A path is a series of keys separated by a dot. The dot character can be escaped with `\`.

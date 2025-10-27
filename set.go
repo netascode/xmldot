@@ -11,6 +11,15 @@ import (
 // Set modifies the xml at the specified path with the given value and returns
 // the modified XML. If the path does not exist, intermediate elements are created.
 //
+// Attribute Creation (v0.3.0+):
+//
+// When setting an attribute on a non-existent element, the parent element is
+// automatically created. This makes it easy to add attributes to new elements:
+//
+//	xml := `<root></root>`
+//	result, _ := Set(xml, "root.user.@id", "123")
+//	// result: <root><user id="123"></user></root>
+//
 // The value can be:
 //   - string, int, float, bool - converted to text content
 //   - []byte - inserted as raw XML

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Auto-create parent elements when setting attributes**: `Set()` now automatically creates missing parent elements when setting attributes on non-existent paths. Previously, this would return an error "parent element not found for attribute". This is a **breaking behavior change** for error handling but makes the API more consistent with element creation behavior.
+  - Example: `Set("<root></root>", "root.user.@id", "123")` now succeeds and creates `<root><user id="123"></user></root>`
+  - Before v0.3.0: This would return an error
+  - After v0.3.0: Element is automatically created with the attribute
+
 ## [0.2.0] - 2025-10-18
 
 ### Added
