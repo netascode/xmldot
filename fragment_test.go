@@ -515,3 +515,274 @@ func TestFragmentEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+// TestSetFragmentSiblingRoots tests Set() creating sibling roots automatically
+func TestSetFragmentSiblingRoots(t *testing.T) {
+	tests := []struct {
+		name     string
+		initial  string
+		ops      []struct{ path, value string }
+		expected string
+	}{
+		{
+			name:    "ACL use case - sequence + deny + permit",
+			initial: "",
+			ops: []struct{ path, value string }{
+				{"sequence", "10"},
+				{"deny.std-ace.prefix", "10.0.0.0"},
+				{"permit.std-ace.prefix", "192.168.0.0"},
+			},
+			expected: "<sequence>10</sequence><deny><std-ace><prefix>10.0.0.0</prefix></std-ace></deny><permit><std-ace><prefix>192.168.0.0</prefix></std-ace></permit>",
+		},
+		{
+			name:    "Different roots - hostname + domain",
+			initial: "<hostname>router1</hostname>",
+			ops: []struct{ path, value string }{
+				{"domain", "example.com"},
+			},
+			expected: "<hostname>router1</hostname><domain>example.com</domain>",
+		},
+		{
+			name:    "Different roots - three siblings",
+			initial: "<hostname>router1</hostname>",
+			ops: []struct{ path, value string }{
+				{"domain", "example.com"},
+				{"port", "8080"},
+			},
+			expected: "<hostname>router1</hostname><domain>example.com</domain><port>8080</port>",
+		},
+		{
+			name:    "Matching root - should nest (existing behavior)",
+			initial: "<config><hostname>router1</hostname></config>",
+			ops: []struct{ path, value string }{
+				{"config.domain", "example.com"},
+			},
+			expected: "<config><hostname>router1</hostname><domain>example.com</domain></config>",
+		},
+		{
+			name:    "Empty XML - creates first root",
+			initial: "",
+			ops: []struct{ path, value string }{
+				{"hostname", "router1"},
+			},
+			expected: "<hostname>router1</hostname>",
+		},
+		{
+			name:    "Multi-root with nested paths",
+			initial: "<user><id>1</id></user>",
+			ops: []struct{ path, value string }{
+				{"group.id", "10"},
+				{"group.name", "admin"},
+			},
+			expected: "<user><id>1</id></user><group><id>10</id><name>admin</name></group>",
+		},
+		{
+			name:    "Add to existing multi-root",
+			initial: "<a>1</a><b>2</b>",
+			ops: []struct{ path, value string }{
+				{"c", "3"},
+			},
+			expected: "<a>1</a><b>2</b><c>3</c>",
+		},
+		{
+			name:    "Modify existing root in multi-root fragment",
+			initial: "<a>1</a><b>2</b>",
+			ops: []struct{ path, value string }{
+				{"b.child", "value"},
+			},
+			expected: "<a>1</a><b>2<child>value</child></b>",
+		},
+		{
+			name:    "Complex nested path as new sibling",
+			initial: "<sequence>10</sequence>",
+			ops: []struct{ path, value string }{
+				{"deny.std-ace.ipv4-address-prefix", "10.0.0.0"},
+				{"deny.std-ace.mask", "0.0.0.255"},
+			},
+			expected: "<sequence>10</sequence><deny><std-ace><ipv4-address-prefix>10.0.0.0</ipv4-address-prefix><mask>0.0.0.255</mask></std-ace></deny>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.initial
+			var err error
+
+			for _, op := range tt.ops {
+				result, err = Set(result, op.path, op.value)
+				if err != nil {
+					t.Fatalf("Set(%q, %q) error: %v", op.path, op.value, err)
+				}
+			}
+
+			if result != tt.expected {
+				t.Errorf("Set() result mismatch\nGot:  %q\nWant: %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestSetFragmentSiblingRootsGet tests that Get() works correctly on multi-root fragments created by Set()
+func TestSetFragmentSiblingRootsGet(t *testing.T) {
+	// Create multi-root fragment using Set()
+	xml := ""
+	xml, _ = Set(xml, "sequence", "10")
+	xml, _ = Set(xml, "deny.std-ace.prefix", "10.0.0.0")
+	xml, _ = Set(xml, "permit.std-ace.prefix", "192.168.0.0")
+
+	// Test Get() on each root
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"sequence", "10"},
+		{"deny.std-ace.prefix", "10.0.0.0"},
+		{"permit.std-ace.prefix", "192.168.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := Get(xml, tt.path)
+			if !result.Exists() {
+				t.Errorf("Get(%q) not found in multi-root fragment", tt.path)
+			}
+			if result.String() != tt.expected {
+				t.Errorf("Get(%q) = %q, want %q", tt.path, result.String(), tt.expected)
+			}
+		})
+	}
+}
+
+// TestSetFragmentSiblingRootsEdgeCases tests edge cases and error conditions
+func TestSetFragmentSiblingRootsEdgeCases(t *testing.T) {
+	t.Run("whitespace between roots", func(t *testing.T) {
+		xml := "<a>1</a>\n  <b>2</b>"
+		result, err := Set(xml, "c", "3")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		// Should append after existing content, whitespace preserved
+		expected := "<a>1</a>\n  <b>2</b><c>3</c>"
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("self-closing root elements", func(t *testing.T) {
+		xml := "<empty/>"
+		result, err := Set(xml, "other", "value")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		expected := "<empty/><other>value</other>"
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("root with attributes", func(t *testing.T) {
+		xml := `<config version="1.0"><hostname>router1</hostname></config>`
+		result, err := Set(xml, "status", "active")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		expected := `<config version="1.0"><hostname>router1</hostname></config><status>active</status>`
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("duplicate root names", func(t *testing.T) {
+		// Multiple roots with same name - should NOT create new sibling
+		xml := "<user>Alice</user><user>Bob</user>"
+		result, err := Set(xml, "user.age", "30")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		// Should modify first matching root (existing behavior)
+		expected := "<user>Alice<age>30</age></user><user>Bob</user>"
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("mixed root types", func(t *testing.T) {
+		xml := "<config/><user>Alice</user>"
+		result, err := Set(xml, "status.active", "true")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		expected := "<config/><user>Alice</user><status><active>true</active></status>"
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("existing root should match even if path has predicates", func(t *testing.T) {
+		// Regression test: predicates in path segment should be stripped before matching
+		xml := "<standard><name>ACL1</name></standard>"
+		// Even though we're using "standard" path (which might internally have predicates),
+		// it should match the existing <standard> root and nest inside it
+		result, err := Set(xml, "standard.description", "Test ACL")
+		if err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+		expected := "<standard><name>ACL1</name><description>Test ACL</description></standard>"
+		if result != expected {
+			t.Errorf("Set() = %q, want %q", result, expected)
+		}
+	})
+}
+
+// TestSetFragmentSiblingRootsRawXML tests SetRaw with multi-root fragments
+func TestSetFragmentSiblingRootsRawXML(t *testing.T) {
+	t.Run("raw XML as new sibling root", func(t *testing.T) {
+		xml := "<sequence>10</sequence>"
+		rawXML := "<child1>value1</child1><child2>value2</child2>"
+		result, err := SetRaw(xml, "deny", rawXML)
+		if err != nil {
+			t.Fatalf("SetRaw() error: %v", err)
+		}
+		expected := "<sequence>10</sequence><deny><child1>value1</child1><child2>value2</child2></deny>"
+		if result != expected {
+			t.Errorf("SetRaw() = %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("raw XML with existing matching root", func(t *testing.T) {
+		xml := "<config><hostname>router1</hostname></config>"
+		rawXML := "<interface>GigabitEthernet0/0</interface>"
+		result, err := SetRaw(xml, "config.interfaces", rawXML)
+		if err != nil {
+			t.Fatalf("SetRaw() error: %v", err)
+		}
+		expected := "<config><hostname>router1</hostname><interfaces><interface>GigabitEthernet0/0</interface></interfaces></config>"
+		if result != expected {
+			t.Errorf("SetRaw() = %q, want %q", result, expected)
+		}
+	})
+}
+
+// BenchmarkSetFragmentSiblingRoots benchmarks the overhead of sibling detection
+func BenchmarkSetFragmentSiblingRoots(b *testing.B) {
+	b.Run("single root (no overhead)", func(b *testing.B) {
+		xml := "<config></config>"
+		for i := 0; i < b.N; i++ {
+			_, _ = Set(xml, "config.hostname", "router1")
+		}
+	})
+
+	b.Run("different root (sibling detection)", func(b *testing.B) {
+		xml := "<sequence>10</sequence>"
+		for i := 0; i < b.N; i++ {
+			_, _ = Set(xml, "deny.prefix", "10.0.0.0")
+		}
+	})
+
+	b.Run("multi-root fragment (multiple scans)", func(b *testing.B) {
+		xml := "<a>1</a><b>2</b><c>3</c>"
+		for i := 0; i < b.N; i++ {
+			_, _ = Set(xml, "d.child", "value")
+		}
+	})
+}

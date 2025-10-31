@@ -440,8 +440,7 @@ func TestSetManyErrors_MalformedXML(t *testing.T) {
 			xml:     "",
 			paths:   []string{"root.a"},
 			values:  []interface{}{"value"},
-			wantErr: true,
-			errType: ErrMalformedXML,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 	}
 
@@ -635,7 +634,7 @@ func TestSetManyBytes_Errors(t *testing.T) {
 			xml:     []byte{},
 			paths:   []string{"root.a"},
 			values:  []interface{}{"value"},
-			wantErr: true,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 		{
 			name:    "malformed bytes",
@@ -844,7 +843,7 @@ func TestDeleteManyBytes_Errors(t *testing.T) {
 			name:    "empty bytes",
 			xml:     []byte{},
 			paths:   []string{"root.item"},
-			wantErr: true,
+			wantErr: true, // Delete on empty XML should error
 		},
 		{
 			name:    "malformed bytes",
@@ -1030,7 +1029,7 @@ func TestDeleteErrors_MalformedXML(t *testing.T) {
 			name:    "empty document",
 			xml:     "",
 			path:    "root.item",
-			wantErr: true,
+			wantErr: true, // Delete on empty XML should error
 			errType: ErrMalformedXML,
 		},
 	}
@@ -1208,7 +1207,7 @@ func TestDeleteBytes_Errors(t *testing.T) {
 			name:    "empty bytes",
 			xml:     []byte{},
 			path:    "root.item",
-			wantErr: true,
+			wantErr: true, // Delete on empty XML should error
 		},
 		{
 			name:    "malformed bytes",
@@ -2061,7 +2060,7 @@ func TestSetWithOptions_OptionsErrors(t *testing.T) {
 			path:    "root.item",
 			value:   "value",
 			opts:    &Options{CaseSensitive: false},
-			wantErr: true,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 		{
 			name:    "invalid path with options",
@@ -2244,7 +2243,7 @@ func TestSetBytesWithOptions_Errors(t *testing.T) {
 			path:    "root.item",
 			value:   "value",
 			opts:    &Options{CaseSensitive: false},
-			wantErr: true,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 		{
 			name:    "malformed bytes with options",
@@ -2496,8 +2495,7 @@ func TestSetErrors_MalformedXML(t *testing.T) {
 			xml:     "",
 			path:    "root.item",
 			value:   "new",
-			wantErr: true,
-			errType: ErrMalformedXML,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 	}
 
@@ -2825,7 +2823,7 @@ func TestSetBytes_Errors(t *testing.T) {
 			xml:     []byte{},
 			path:    "root.item",
 			value:   "value",
-			wantErr: true,
+			wantErr: false, // Empty XML is now valid for creating new XML from scratch
 		},
 		{
 			name:    "malformed bytes",

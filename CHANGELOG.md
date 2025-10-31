@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Set()` now works with empty XML and creates sibling roots in fragments**: Previously, `Set()` would fail on empty XML or incorrectly try to nest paths under existing roots even when a different root was specified. Now:
+  - Empty XML is accepted: `Set("", "root.child", "value")` creates valid XML from scratch
+  - Different root names create siblings
+  - Matching root names still nest inside existing roots (preserves expected behavior)
+  - Enables building multi-root XML fragments incrementally
+
 ## [0.4.0] - 2025-10-31
 
 ### Added

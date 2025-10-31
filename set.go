@@ -443,6 +443,11 @@ func SetWithOptions(xml, path string, value interface{}, opts *Options) (string,
 // Security: Documents larger than MaxDocumentSize (10MB) are rejected to prevent
 // memory exhaustion attacks.
 func SetBytesWithOptions(xml []byte, path string, value interface{}, opts *Options) ([]byte, error) {
+	// Nil bytes are invalid
+	if xml == nil {
+		return xml, ErrMalformedXML
+	}
+
 	// Security check: reject documents that are too large
 	if len(xml) > MaxDocumentSize {
 		return xml, ErrMalformedXML
@@ -450,9 +455,11 @@ func SetBytesWithOptions(xml []byte, path string, value interface{}, opts *Optio
 
 	// Validate XML well-formedness unless in optimistic mode (future feature)
 	// This prevents crashes from malformed XML discovered by fuzz testing
-	if !ValidBytes(xml) {
+	// Special case: empty XML is valid for Set operations (creating new XML from scratch)
+	if len(xml) > 0 && !ValidBytes(xml) {
 		return xml, ErrMalformedXML
 	}
+	// Empty XML ([]byte{} or "") is valid for Set operations (not for Delete)
 
 	// Handle nil value as deletion
 	if value == nil {

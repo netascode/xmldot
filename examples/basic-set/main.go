@@ -19,7 +19,8 @@ const profileXML = `<user>
 
 func main() {
 	fmt.Println("Basic Set Operations Example")
-	fmt.Println("============================\n")
+	fmt.Println("============================")
+	fmt.Println()
 
 	// Example 1: Update element value
 	fmt.Println("Example 1: Update element value")
@@ -90,8 +91,42 @@ func main() {
 	fmt.Printf("Age: %d\n", age.Int())
 	fmt.Printf("Premium: %v\n\n", premium.Bool())
 
-	// Example 8: Verify final state
-	fmt.Println("Example 8: Final XML state")
+	// Example 8: Create XML from scratch
+	fmt.Println("Example 8: Create XML from scratch (empty XML)")
+	newXML, err := xmldot.Set("", "config.hostname", "router1")
+	if err != nil {
+		log.Fatal(err)
+	}
+	hostname := xmldot.Get(newXML, "config.hostname")
+	fmt.Printf("Created hostname: %s\n\n", hostname.String())
+
+	// Example 9: Create sibling root elements
+	fmt.Println("Example 9: Create sibling root elements (multi-root fragment)")
+	fragment := `<sequence>10</sequence>`
+
+	// Add different root - creates sibling
+	fragment, err = xmldot.Set(fragment, "deny.prefix", "10.0.0.0")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Add another sibling
+	fragment, err = xmldot.Set(fragment, "permit.prefix", "192.168.0.0")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Query the fragment
+	seq := xmldot.Get(fragment, "sequence")
+	deny := xmldot.Get(fragment, "deny.prefix")
+	permit := xmldot.Get(fragment, "permit.prefix")
+	fmt.Printf("Sequence: %s\n", seq.String())
+	fmt.Printf("Deny prefix: %s\n", deny.String())
+	fmt.Printf("Permit prefix: %s\n", permit.String())
+	fmt.Printf("Fragment: %s\n\n", fragment)
+
+	// Example 10: Verify final state
+	fmt.Println("Example 10: Final XML state")
 	finalXML := xmldot.Get(xml, "user|@pretty")
 	fmt.Println(finalXML.String())
 }

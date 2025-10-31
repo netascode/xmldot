@@ -418,9 +418,9 @@ func (b *xmlBuilder) replaceAttribute(location *elementLocation, attrName string
 
 // createElement creates a new element at the specified path
 func (b *xmlBuilder) createElement(path []PathSegment, xmlValue string, isRaw bool) error {
-	// Security check
+	// Special case: empty XML - create new root element
 	if len(b.data) == 0 {
-		return ErrMalformedXML
+		return b.createSiblingRoot(path, xmlValue, isRaw)
 	}
 
 	// Find the deepest existing parent in the path
@@ -452,6 +452,14 @@ func (b *xmlBuilder) createElement(path []PathSegment, xmlValue string, isRaw bo
 
 // createInRoot creates element path starting from root
 func (b *xmlBuilder) createInRoot(path []PathSegment, xmlValue string, isRaw bool) error {
+	// Check if we should create a sibling root instead
+	if len(path) > 0 && path[0].Type == SegmentElement {
+		targetRootName := path[0].Value
+		if b.shouldCreateSiblingRoot(targetRootName) {
+			return b.createSiblingRoot(path, xmlValue, isRaw)
+		}
+	}
+
 	// Find the root element to insert into
 	parser := newXMLParser(b.data)
 	if !parser.skipToNextElement() {
@@ -520,6 +528,65 @@ func (b *xmlBuilder) createInRoot(path []PathSegment, xmlValue string, isRaw boo
 	b.buildElementPath(pathToCreate, xmlValue, isRaw)
 
 	b.result.Write(b.data[contentEnd:])
+	return nil
+}
+
+// shouldCreateSiblingRoot checks if the target root name exists in the XML.
+// If the XML contains a root element but its name differs from targetRootName,
+// we should create a new sibling root element instead of nesting inside the existing root.
+//
+// Returns true if:
+// - XML has at least one root element
+// - AND no root element matches targetRootName
+//
+// This enables multi-root XML fragments like:
+//
+//	<sequence>10</sequence><deny>...</deny><permit>...</permit>
+func (b *xmlBuilder) shouldCreateSiblingRoot(targetRootName string) bool {
+	if len(b.data) == 0 {
+		// Empty XML - not creating sibling
+		return false
+	}
+
+	parser := newXMLParser(b.data)
+
+	// Scan all root-level elements
+	for parser.skipToNextElement() {
+		parser.next() // skip '<'
+		elemName, _, isSelfClosing := parser.parseElementName()
+
+		if elemName == targetRootName {
+			// Found matching root - should NOT create sibling
+			return false
+		}
+
+		// Skip to next root element
+		if !isSelfClosing {
+			parser.parseElementContent(elemName)
+		}
+	}
+
+	// No matching root found - create sibling
+	return true
+}
+
+// createSiblingRoot appends a new root element to the XML fragment.
+// This is used when Set() is called with a path that doesn't match any existing roots.
+//
+// Example:
+//
+//	XML: <sequence>10</sequence>
+//	Set("deny.prefix", "10.0.0.0")
+//	Result: <sequence>10</sequence><deny><prefix>10.0.0.0</prefix></deny>
+func (b *xmlBuilder) createSiblingRoot(path []PathSegment, xmlValue string, isRaw bool) error {
+	b.result.Reset()
+
+	// Copy all existing XML
+	b.result.Write(b.data)
+
+	// Build new root element with path
+	b.buildElementPath(path, xmlValue, isRaw)
+
 	return nil
 }
 
