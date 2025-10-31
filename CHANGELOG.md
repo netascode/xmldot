@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Array append operations using `-1` index**: `Set()` and `SetRaw()` now support using index `-1` to append elements to arrays. This provides an intuitive way to add items without calculating array length.
+  - `SetRaw(xml, "items.item.-1", "<name>New Item</name>")` appends to existing array
+  - Creates first element when array is empty: `SetRaw(xml, "root.item.-1", "<value>First</value>")`
+  - Auto-creates parent paths when needed
+  - Treats single elements as 1-element arrays and appends a second
+  - Limitations: Only supported in Set/SetRaw operations (not Get/Delete), nested paths after `-1` are not allowed
+
+### Fixed
+
+- **Array iteration examples**: Updated examples to use proper field extraction syntax (`#.field`) for iterating over array elements, fixing previous incorrect usage patterns
+
 ## [0.3.1] - 2025-10-27
 
 ### Fixed
@@ -37,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[Unreleased]: https://github.com/netascode/xmldot/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/netascode/xmldot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/netascode/xmldot/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/netascode/xmldot/compare/v0.1.0...v0.2.0

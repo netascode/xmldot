@@ -216,6 +216,22 @@ catalog.book.#               >> 2 (count of books)
 catalog.book.tags.tag.#      >> 2 (count of tags)
 ```
 
+Append new elements using index `-1` with `Set()` or `SetRaw()`:
+
+```go
+xml := `<catalog><book><title>Book 1</title></book></catalog>`
+
+// Append a new book using SetRaw for XML content
+result, _ := xmldot.SetRaw(xml, "catalog.book.-1", "<title>Book 2</title>")
+count := xmldot.Get(result, "catalog.book.#")
+// count.Int() → 2
+
+// Works with empty arrays too
+xml2 := `<catalog></catalog>`
+result2, _ := xmldot.SetRaw(xml2, "catalog.book.-1", "<title>First Book</title>")
+// Result: <catalog><book><title>First Book</title></book></catalog>
+```
+
 ### Attributes
 
 Attributes are accessed with the `@` prefix:
@@ -357,13 +373,15 @@ result.Index          // index in original xml
 result.String() string
 result.Bool() bool
 result.Int() int64
-result.Uint() uint64
 result.Float() float64
 result.Array() []Result
-result.Map() map[string]Result
 result.Exists() bool
+result.IsArray() bool
+result.Value() interface{}
 result.Get(path string) Result
-result.ForEach(iterator func(key, value Result) bool)
+result.GetMany(paths ...string) []Result
+result.GetWithOptions(path string, opts *Options) Result
+result.ForEach(iterator func(index int, value Result) bool)
 ```
 
 ## Namespaces

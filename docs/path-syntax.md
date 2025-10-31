@@ -346,7 +346,11 @@ fmt.Println(third.String())   // → "Book 3"
 
 ### Negative Indices
 
-Negative indices count from the end of the array:
+Negative index `-1` is supported for `Set()` and `SetRaw()` operations to append elements (see [Modifying Arrays](#modifying-arrays)).
+
+Note: Negative indices for `Get()` are not currently implemented. To access the last element, you need to:
+1. Get the count using `#`
+2. Access the element at index `count-1`
 
 ```go
 xml := `
@@ -356,11 +360,10 @@ xml := `
     <item>Third</item>
 </items>`
 
-last := xmldot.Get(xml, "items.item.-1")
-secondLast := xmldot.Get(xml, "items.item.-2")
-
-fmt.Println(last.String())        // → "Third"
-fmt.Println(secondLast.String())  // → "Second"
+// Get last element by calculating index
+count := xmldot.Get(xml, "items.item.#").Int()
+last := xmldot.Get(xml, fmt.Sprintf("items.item.%d", count-1))
+fmt.Println(last.String())  // → "Third"
 ```
 
 ### Array Count
@@ -387,9 +390,6 @@ Accessing beyond array bounds returns null:
 xml := `<items><item>A</item><item>B</item></items>`
 
 result := xmldot.Get(xml, "items.item.10")
-fmt.Println(result.Exists())  // → false
-
-result = xmldot.Get(xml, "items.item.-10")
 fmt.Println(result.Exists())  // → false
 ```
 
@@ -519,6 +519,85 @@ items.ForEach(func(i int, item Result) bool {
 })
 fmt.Printf("Total: $%.2f\n", total)  // → Total: $52.48
 ```
+
+### Array Append Operations
+
+**Available since:** v0.4.0
+
+Use index `-1` with `Set()` or `SetRaw()` to append new elements to an array:
+
+```go
+xml := `
+<cart>
+    <items>
+        <item><name>Book</name></item>
+        <item><name>Pen</name></item>
+    </items>
+</cart>`
+
+// Append a new item to the array using SetRaw for XML content
+result, err := xmldot.SetRaw(xml, "cart.items.item.-1", "<name>Notebook</name>")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Verify the append
+count := xmldot.Get(result, "cart.items.item.#")
+fmt.Println(count.Int())  // → 3
+
+// Get last item's name by index
+lastIndex := count.Int() - 1
+lastName := xmldot.Get(result, fmt.Sprintf("cart.items.item.%d.name", lastIndex))
+fmt.Println(lastName.String())  // → "Notebook"
+```
+
+**Creating First Element**: When the array is empty, `-1` creates the first element:
+
+```go
+xml := `<cart><items></items></cart>`
+
+result, err := xmldot.SetRaw(xml, "cart.items.item.-1", "<name>First Item</name>")
+if err != nil {
+    log.Fatal(err)
+}
+
+count := xmldot.Get(result, "cart.items.item.#")
+fmt.Println(count.Int())  // → 1
+```
+
+**Auto-Creating Parents**: If the parent path doesn't exist, it will be created automatically:
+
+```go
+xml := `<cart></cart>`
+
+// Creates <items> parent automatically
+result, err := xmldot.SetRaw(xml, "cart.items.item.-1", "<name>First Item</name>")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Result: <cart><items><item><name>First Item</name></item></items></cart>
+```
+
+**Appending to Single Elements**: If only one element exists, `-1` treats it as a 1-element array and appends a second:
+
+```go
+xml := `<items><item>First</item></items>`
+
+// Use Set() for simple text content, SetRaw() for XML markup
+result, err := xmldot.Set(xml, "items.item.-1", "Second")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Result: <items><item>First</item><item>Second</item></items>
+```
+
+**Limitations**:
+
+- Only supported in `Set()` and `SetRaw()` operations
+- Nested paths after `-1` are not allowed: `item.-1.child` returns an error
+- Other negative indices (`-2`, `-3`, etc.) are reserved and return an error
 
 ---
 
@@ -1966,8 +2045,9 @@ See the main documentation for Options details.
 // Get first item in array
 xmldot.Get(xml, "items.item.0")
 
-// Get last item in array
-xmldot.Get(xml, "items.item.-1")
+// Get last item in array (calculate index)
+count := xmldot.Get(xml, "items.item.#").Int()
+xmldot.Get(xml, fmt.Sprintf("items.item.%d", count-1))
 
 // Count items
 xmldot.Get(xml, "items.item.#")

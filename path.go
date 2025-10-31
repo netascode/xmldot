@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,30 @@ const (
 	SegmentFieldExtraction
 )
 
+// IndexIntent represents the semantic intent of an index operation.
+// This allows clean separation between syntax (what user wrote) and
+// semantics (what should happen).
+type IndexIntent int
+
+const (
+	// IntentReplace replaces an existing element at a specific index.
+	// Example: items.item.0 replaces the first item
+	IntentReplace IndexIntent = iota
+
+	// IntentAppend creates a NEW element at the end of the array.
+	// Only triggered by -1 index in Set/SetRaw operations.
+	// Example: items.item.-1 appends a new item
+	IntentAppend
+
+	// IntentAccess reads an element (used in Get, not Set/SetRaw).
+	// Example: items.item.-1 accesses last element (Get only)
+	IntentAccess
+
+	// Future extensibility:
+	// IntentInsertBefore (for -2, -3, etc.)
+	// IntentConditionalAppend (append only if not exists)
+)
+
 // PathSegment represents a single segment in a parsed path.
 type PathSegment struct {
 	// Type is the type of this path segment.
@@ -55,6 +80,9 @@ type PathSegment struct {
 	Value string
 	// Index is the array index if Type is SegmentIndex.
 	Index int
+	// Intent represents the semantic intent for index operations (only set for SegmentIndex).
+	// Enables clean separation of syntax (Index=-1) from semantics (Intent=IntentAppend).
+	Intent IndexIntent
 	// Wildcard indicates if this is a recursive wildcard (**).
 	Wildcard bool
 	// Filter contains the filter expression if Type is SegmentFilter.
@@ -567,4 +595,53 @@ func splitNamespace(name string) (prefix, localName string) {
 	}
 
 	return prefix, localName
+}
+
+// resolveIndexIntent determines the semantic intent of an index segment
+// based on context (Set vs Get) and validation rules.
+//
+// Context:
+//   - opContext: "set" for Set/SetRaw, "get" for Get/Delete
+//
+// Rules:
+//   - Index >= 0: always IntentReplace (or IntentAccess in Get)
+//   - Index == -1 in Set: IntentAppend if allowed, error if nested path
+//   - Index == -1 in Get: IntentAccess (existing behavior)
+//   - Index < -1: Reserved for future use, currently error
+//
+// Returns:
+//   - IndexIntent and nil if valid
+//   - IntentReplace and error if invalid (e.g., nested append)
+func resolveIndexIntent(seg PathSegment, segIndex int, segments []PathSegment, opContext string) (IndexIntent, error) {
+	if seg.Type != SegmentIndex {
+		return IntentReplace, fmt.Errorf("not an index segment")
+	}
+
+	// Non-negative indices: always replace/access
+	if seg.Index >= 0 {
+		if opContext == "set" {
+			return IntentReplace, nil
+		}
+		return IntentAccess, nil
+	}
+
+	// Negative indices
+	switch seg.Index {
+	case -1:
+		if opContext == "get" {
+			return IntentAccess, nil // Existing Get behavior (not yet implemented)
+		}
+
+		// Set operation: check if this is last segment
+		if segIndex != len(segments)-1 {
+			// Nested path like item.-1.child is not supported
+			return IntentReplace, fmt.Errorf("%w: append (-1 index) cannot be used with nested paths (e.g., item.-1.child)", ErrInvalidPath)
+		}
+
+		return IntentAppend, nil
+
+	default:
+		// -2, -3, etc: reserved for future use
+		return IntentReplace, fmt.Errorf("%w: index %d reserved for future use; only -1 (append) is currently supported", ErrInvalidPath, seg.Index)
+	}
 }

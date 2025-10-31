@@ -100,6 +100,40 @@ func (b *xmlBuilder) setElement(path []PathSegment, value interface{}) error {
 		return ErrMalformedXML
 	}
 
+	// Check for append operation (-1 index) and resolve intent
+	// This must be done before other operations to properly validate nested paths
+	// IMPORTANT: Copy path to avoid mutating cached paths (prevents concurrency issues)
+	var pathCopy []PathSegment
+	needsCopy := false
+
+	for i, seg := range path {
+		if seg.Type == SegmentIndex {
+			// Make copy on first mutation to avoid corrupting path cache
+			if !needsCopy {
+				pathCopy = make([]PathSegment, len(path))
+				copy(pathCopy, path)
+				needsCopy = true
+			}
+
+			intent, err := resolveIndexIntent(seg, i, pathCopy, "set")
+			if err != nil {
+				return err
+			}
+			// Update the segment with resolved intent (safe because we copied)
+			pathCopy[i].Intent = intent
+
+			// If this is an append operation, delegate to appendElement
+			if intent == IntentAppend {
+				return b.appendElement(pathCopy, value)
+			}
+		}
+	}
+
+	// Use copied path if we made one, otherwise use original
+	if needsCopy {
+		path = pathCopy
+	}
+
 	// Check if this is actually an attribute operation
 	if len(path) > 0 && path[len(path)-1].Type == SegmentAttribute {
 		// This is an attribute set, not element set
@@ -589,6 +623,228 @@ func (b *xmlBuilder) createElementForAttribute(elementPath []PathSegment, attrSe
 
 	// Step 5: Set the attribute on the created element
 	return b.replaceAttribute(location, attrSeg.Value, attrValue)
+}
+
+// appendElement creates a NEW element at the end of an array.
+// This implements -1 index append semantics for Set/SetRaw.
+//
+// Behavior:
+//   - If parent array has 0 elements: creates first element
+//   - If parent array has N elements: creates (N+1)th element
+//   - Single existing element treated as 1-element array: creates second
+//
+// Example:
+//
+//	XML: <items><item>first</item></items>
+//	Path: items.item.-1
+//	Result: <items><item>first</item><item>NEW</item></items>
+//
+// Security: Inherits all limits from createElement (MaxPathSegments, MaxDocumentSize)
+func (b *xmlBuilder) appendElement(path []PathSegment, value interface{}) error {
+	// Convert value to XML
+	xmlValue, isRaw, err := valueToXML(value)
+	if err != nil {
+		return err
+	}
+
+	// Security check
+	if len(xmlValue) > MaxValueSize {
+		return fmt.Errorf("%w: value exceeds maximum size", ErrInvalidValue)
+	}
+
+	// Path structure: parent segments + element segment + index segment
+	// Example: "items.item.-1" → ["items", "item", "-1"]
+	if len(path) < 2 {
+		return fmt.Errorf("%w: append requires at least element.-1", ErrInvalidPath)
+	}
+
+	// Validate last segment is Index with -1
+	lastSeg := path[len(path)-1]
+	if lastSeg.Type != SegmentIndex || lastSeg.Index != -1 {
+		return fmt.Errorf("%w: expected -1 index for append operation", ErrInvalidPath)
+	}
+
+	// Split into parent path and element name
+	parentPath := path[:len(path)-2] // All segments before the element name
+	elementSeg := path[len(path)-2]  // The element to append
+
+	if elementSeg.Type != SegmentElement {
+		return fmt.Errorf("%w: can only append elements, not attributes or other types", ErrInvalidPath)
+	}
+
+	// Find parent element location
+	parser := newXMLParser(b.data)
+	var parentLoc *elementLocation
+	var found bool
+
+	if len(parentPath) > 0 {
+		parentLoc, found = b.findElementLocation(parser, parentPath, 0, 0)
+		if !found {
+			// Parent doesn't exist - create entire path including first element
+			// Remove the -1 index segment and create the path
+			createPath := path[:len(path)-1]
+			return b.createElement(createPath, xmlValue, isRaw)
+		}
+	} else {
+		// Appending to root-level element
+		// Find root element as parent
+		if !parser.skipToNextElement() {
+			return ErrMalformedXML
+		}
+		elemStartPos := parser.pos
+		parser.next()
+		elemName, attrs, isSelfClosing := parser.parseElementName()
+
+		contentStart := parser.pos
+		var contentEnd int
+		if isSelfClosing {
+			contentEnd = parser.pos
+		} else {
+			_ = parser.parseElementContent(elemName)
+			contentEnd = parser.pos - len(elemName) - 3
+		}
+
+		parentLoc = &elementLocation{
+			startPos:      elemStartPos,
+			contentStart:  contentStart,
+			contentEnd:    contentEnd,
+			elementName:   elemName,
+			attrs:         attrs,
+			isSelfClosing: isSelfClosing,
+		}
+	}
+
+	// Handle self-closing parent - must convert to full element first
+	if parentLoc.isSelfClosing {
+		// Convert <parent/> to <parent><child>value</child></parent>
+		b.result.Reset()
+		b.result.Write(b.data[:parentLoc.startPos])
+
+		// Rebuild opening tag
+		b.result.WriteString("<")
+		b.result.WriteString(parentLoc.elementName)
+
+		// Preserve attributes
+		if len(parentLoc.attrs) > 0 {
+			// Sort for deterministic output
+			attrNames := make([]string, 0, len(parentLoc.attrs))
+			for name := range parentLoc.attrs {
+				attrNames = append(attrNames, name)
+			}
+			sort.Strings(attrNames)
+
+			for _, name := range attrNames {
+				b.result.WriteString(" ")
+				b.result.WriteString(name)
+				b.result.WriteString(`="`)
+				b.result.WriteString(escapeXML(parentLoc.attrs[name]))
+				b.result.WriteString(`"`)
+			}
+		}
+
+		b.result.WriteString(">")
+
+		// Add new element
+		b.result.WriteString("<")
+		b.result.WriteString(elementSeg.Value)
+		b.result.WriteString(">")
+		b.result.WriteString(xmlValue)
+		b.result.WriteString("</")
+		b.result.WriteString(elementSeg.Value)
+		b.result.WriteString(">")
+
+		// Close parent
+		b.result.WriteString("</")
+		b.result.WriteString(parentLoc.elementName)
+		b.result.WriteString(">")
+
+		// Write rest of document after self-closing tag
+		b.result.Write(b.data[parentLoc.contentEnd:])
+
+		return nil
+	}
+
+	// Find insertion point (after last matching element)
+	insertPos := b.findLastMatchPosition(parentLoc, elementSeg)
+
+	// Build result XML
+	b.result.Reset()
+	b.result.Write(b.data[:insertPos])
+
+	// Build new element with proper indentation
+	indent := b.opts.Indent
+	useIndent := indent != ""
+
+	if useIndent && insertPos > parentLoc.contentStart {
+		// Parent has content - add newline and indent
+		b.result.WriteString("\n")
+		// Calculate indent depth
+		depth := len(parentPath)
+		for i := 0; i < depth; i++ {
+			b.result.WriteString(indent)
+		}
+	}
+
+	// Write new element
+	b.result.WriteString("<")
+	b.result.WriteString(elementSeg.Value)
+	b.result.WriteString(">")
+	// xmlValue already properly escaped by valueToXML (or raw if isRaw flag was set)
+	b.result.WriteString(xmlValue)
+	b.result.WriteString("</")
+	b.result.WriteString(elementSeg.Value)
+	b.result.WriteString(">")
+
+	// Write rest of document
+	b.result.Write(b.data[insertPos:])
+
+	// Security check: validate final document size doesn't exceed limit
+	if b.result.Len() > MaxDocumentSize {
+		return fmt.Errorf("%w: resulting document exceeds maximum size", ErrInvalidValue)
+	}
+
+	return nil
+}
+
+// findLastMatchPosition finds the position after the last child element
+// matching the given name within a parent element's content.
+// Returns the parent's contentStart if no matches found (empty array case).
+// Note: Self-closing parents are handled in appendElement before calling this function.
+func (b *xmlBuilder) findLastMatchPosition(parent *elementLocation, targetSeg PathSegment) int {
+	// If parent is self-closing, return contentStart
+	// (appendElement will handle the conversion to full element)
+	if parent.isSelfClosing {
+		return parent.contentStart
+	}
+
+	// Scan parent's content for matching children
+	content := b.data[parent.contentStart:parent.contentEnd]
+	parser := newXMLParser(content)
+
+	lastMatchEnd := parent.contentStart // Default: start of parent content (empty array case)
+
+	for parser.skipToNextElement() {
+		parser.next()
+		elemName, _, isSelfClosing := parser.parseElementName()
+
+		// Check if matches target using PathSegment matching (supports case-insensitive)
+		if targetSeg.matchesWithOptions(elemName, b.opts) {
+			// This is a match - track its end position
+			if isSelfClosing {
+				lastMatchEnd = parent.contentStart + parser.pos
+			} else {
+				_ = parser.parseElementContent(elemName)
+				lastMatchEnd = parent.contentStart + parser.pos
+			}
+		} else {
+			// Not a match - skip
+			if !isSelfClosing {
+				parser.parseElementContent(elemName)
+			}
+		}
+	}
+
+	return lastMatchEnd
 }
 
 // buildElementPath builds a chain of nested elements

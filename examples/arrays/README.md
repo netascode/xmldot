@@ -37,7 +37,7 @@ First: Book
 Second: Pen
 Last: Notebook
 
-Example 3: Negative indices (last element)
+Example 3: Access last element by direct index
 Last item: Notebook
 
 Example 4: Replace array element
@@ -47,18 +47,21 @@ Example 5: Append to array
 Items after append: 4
 
 Example 6: Delete array element
-Items after delete: 3
+Items after delete: 2
+New first item: Pen
 
 Example 7: Iterate with ForEach
 Current items:
-  - Pencil (qty: 5)
+  - Book (qty: 2)
+  - Pen (qty: 5)
   - Notebook (qty: 1)
   - Eraser (qty: 3)
 
 Example 8: Array() method for all elements
-1. Pencil
-2. Notebook
-3. Eraser
+1. Book
+2. Pen
+3. Notebook
+4. Eraser
 
 Example 9: SetMany for multiple array updates
 Updated quantities: 10, 20, 30
@@ -83,8 +86,8 @@ Repeated elements with the same name are automatically detected as arrays:
 ### Array Indexing
 
 - **Positive indices**: `item.0`, `item.1`, `item.2` (zero-based)
-- **Negative indices**: `item.-1` (last element), `item.-2` (second-to-last)
 - **Count**: `item.#` returns the number of elements
+- **Last element**: Calculate index as `count - 1` (negative indices not yet supported for Get)
 
 ### Array Modification
 
@@ -104,9 +107,9 @@ The example demonstrates comprehensive array operations:
 
 1. **Count Elements**: Use `#` to get array length
 2. **Index Access**: Access specific elements by position
-3. **Negative Indexing**: Use `-1` for last element (Python-style)
+3. **Last Element Access**: Calculate index using count (negative indices not yet supported)
 4. **Element Replacement**: Update specific array element
-5. **Array Append**: Add new element at end using `-1` index
+5. **Array Append**: Add new element at end using `-1` index with `Set()` or `SetRaw()`
 6. **Element Deletion**: Remove specific element by index
 7. **ForEach Iteration**: Process each element with callback
 8. **Array Extraction**: Get all elements as Go slice

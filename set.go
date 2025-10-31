@@ -11,6 +11,23 @@ import (
 // Set modifies the xml at the specified path with the given value and returns
 // the modified XML. If the path does not exist, intermediate elements are created.
 //
+// Array Append Operations (v0.3.1+):
+//
+// Use index -1 to append a new element to an array:
+//
+//	xml := `<root><item>first</item></root>`
+//	result, _ := Set(xml, "root.item.-1", "second")
+//	// result: <root><item>first</item><item>second</item></root>
+//
+// When the array is empty, -1 creates the first element:
+//
+//	xml := `<root></root>`
+//	result, _ := Set(xml, "root.item.-1", "first")
+//	// result: <root><item>first</item></root>
+//
+// Note: Only -1 is supported for append. Other negative indices return an error.
+// Note: Nested paths after -1 (e.g., "item.-1.child") are not supported.
+//
 // Attribute Creation (v0.3.0+):
 //
 // When setting an attribute on a non-existent element, the parent element is
@@ -62,6 +79,14 @@ func SetBytes(xml []byte, path string, value interface{}) ([]byte, error) {
 // SetRaw embeds pre-formatted XML at the specified path without parsing or escaping.
 // The raw XML must be well-formed. This function performs basic validation to ensure
 // the raw XML doesn't contain unmatched tags.
+//
+// Array Append Operations (v0.3.1+):
+//
+// SetRaw also supports -1 index for appending raw XML to arrays:
+//
+//	xml := `<root><item>first</item></root>`
+//	modified, _ := SetRaw(xml, "root.item.-1", "<child>value</child>")
+//	// modified: <root><item>first</item><item><child>value</child></item></root>
 //
 // Example:
 //

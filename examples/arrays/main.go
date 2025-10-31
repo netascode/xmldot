@@ -34,9 +34,9 @@ func main() {
 	fmt.Printf("Second: %s\n", second.String())
 	fmt.Printf("Last: %s\n\n", last.String())
 
-	// Example 3: Negative indices
-	fmt.Println("Example 3: Negative indices (last element)")
-	lastItem := xmldot.Get(cartXML, "cart.items.item.-1.name")
+	// Example 3: Access last element by direct index
+	fmt.Println("Example 3: Access last element by direct index")
+	lastItem := xmldot.Get(cartXML, "cart.items.item.2.name")
 	fmt.Printf("Last item: %s\n\n", lastItem.String())
 
 	// Example 4: Replace array element
@@ -48,10 +48,14 @@ func main() {
 	updated := xmldot.Get(xml, "cart.items.item.1.name")
 	fmt.Printf("Updated second item: %s\n\n", updated.String())
 
-	// Example 5: Count after modification
-	fmt.Println("Example 5: Count after modification")
-	currentCount := xmldot.Get(xml, "cart.items.item.#")
-	fmt.Printf("Current item count: %d\n\n", currentCount.Int())
+	// Example 5: Append to array (use fresh XML)
+	fmt.Println("Example 5: Append to array")
+	xml3, err := xmldot.SetRaw(cartXML, "cart.items.item.-1", "<name>Eraser</name><quantity>3</quantity>")
+	if err != nil {
+		log.Fatal(err)
+	}
+	appendCount := xmldot.Get(xml3, "cart.items.item.#")
+	fmt.Printf("Items after append: %d\n\n", appendCount.Int())
 
 	// Example 6: Delete array element (use fresh XML)
 	fmt.Println("Example 6: Delete array element")
@@ -64,24 +68,24 @@ func main() {
 	firstItem := xmldot.Get(xml2, "cart.items.item.0.name")
 	fmt.Printf("New first item: %s\n\n", firstItem.String())
 
-	// Example 7: Iterate with ForEach
+	// Example 7: Iterate with ForEach (use xml3 with appended element)
 	fmt.Println("Example 7: Iterate with ForEach")
-	result := xmldot.Get(cartXML, "cart.items.item")
-	fmt.Println("All items:")
-	result.ForEach(func(index int, value xmldot.Result) bool {
-		name := xmldot.Get(value.Raw, "name")
-		qty := xmldot.Get(value.Raw, "quantity")
-		fmt.Printf("  %d. %s (qty: %s)\n", index+1, name.String(), qty.String())
-		return true // Continue iteration
-	})
+	fmt.Println("Current items:")
+	count2 := int(xmldot.Get(xml3, "cart.items.item.#").Int())
+	for i := 0; i < count2; i++ {
+		namePath := fmt.Sprintf("cart.items.item.%d.name", i)
+		qtyPath := fmt.Sprintf("cart.items.item.%d.quantity", i)
+		name := xmldot.Get(xml3, namePath)
+		qty := xmldot.Get(xml3, qtyPath)
+		fmt.Printf("  - %s (qty: %s)\n", name.String(), qty.String())
+	}
 	fmt.Println()
 
 	// Example 8: Array() method for all elements
 	fmt.Println("Example 8: Array() method for all elements")
-	items := xmldot.Get(cartXML, "cart.items.item.name")
-	fmt.Println("Item names:")
+	items := xmldot.Get(xml3, "cart.items.item.#.name")
 	for i, item := range items.Array() {
-		fmt.Printf("  %d. %s\n", i+1, item.String())
+		fmt.Printf("%d. %s\n", i+1, item.String())
 	}
 	fmt.Println()
 
@@ -98,7 +102,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	quantities := xmldot.Get(xml, "cart.items.item.quantity")
+	quantities := xmldot.Get(xml, "cart.items.item.#.quantity")
 	fmt.Print("Updated quantities: ")
 	for i, q := range quantities.Array() {
 		if i > 0 {
