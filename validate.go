@@ -290,13 +290,9 @@ func (p *validatingParser) parseOpeningTag(tagLine, tagColumn int) *ValidateErro
 	// Track root element
 	if !p.rootFound {
 		p.rootFound = true
-	} else if len(p.tagStack) == 0 {
-		// Multiple root elements
-		return &ValidateError{
-			Line:    tagLine,
-			Column:  tagColumn,
-			Message: "multiple root elements",
-		}
+	} else if len(p.tagStack) == 0 && p.rootClosed {
+		// Fragment support: Starting a new root element after closing previous one
+		p.rootClosed = false
 	}
 
 	// Push to tag stack if not self-closing

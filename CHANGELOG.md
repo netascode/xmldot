@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **XML fragment support**: xmldot now supports XML fragments with multiple root elements. Fragments with matching root names can be treated as arrays using standard array syntax. This is useful for processing log entries, streaming data, and partial XML documents.
+  - Validation accepts multiple root elements: `Valid("<item>A</item><item>B</item>")` → true
+  - Get/Set/Delete operations work with fragments (operate on first matching root element)
+  - Array operations on matching roots: `Get(fragment, "user.#")`, `Get(fragment, "user.0.name")`, `Get(fragment, "user.#.name")`
+  - Whitespace and comments between roots are preserved
+  - Text content between roots is still rejected (maintains well-formedness)
+  - All security limits remain enforced
+
 - **Array append operations using `-1` index**: `Set()` and `SetRaw()` now support using index `-1` to append elements to arrays. This provides an intuitive way to add items without calculating array length.
   - `SetRaw(xml, "items.item.-1", "<name>New Item</name>")` appends to existing array
   - Creates first element when array is empty: `SetRaw(xml, "root.item.-1", "<value>First</value>")`

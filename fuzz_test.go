@@ -1515,8 +1515,8 @@ func FuzzValidateSizeLimit(f *testing.F) {
 	})
 }
 
-// FuzzValidateMultiRoot tests validation with multiple root elements.
-// This ensures single root requirement is validated.
+// FuzzValidateMultiRoot tests validation with multiple root elements (fragments).
+// Fragments with multiple roots are now supported and should validate successfully.
 func FuzzValidateMultiRoot(f *testing.F) {
 	// Seed with multi-root patterns
 	f.Add("<root/><root/>")

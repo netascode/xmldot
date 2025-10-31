@@ -416,6 +416,32 @@ if err := xmldot.ValidateWithError(xml); err != nil {
 }
 ```
 
+## XML Fragments (Multiple Roots)
+
+xmldot supports XML fragments with multiple root elements. Fragments with matching root names can be treated as arrays:
+
+```go
+fragment := `<user id="1"><name>Alice</name></user>
+<user id="2"><name>Bob</name></user>
+<user id="3"><name>Carol</name></user>`
+
+// Validation accepts multiple roots
+if xmldot.Valid(fragment) {
+    fmt.Println("Fragment is valid")
+}
+
+// Query first matching root
+name := xmldot.Get(fragment, "user.name")  // → "Alice"
+
+// Array operations on matching roots
+count := xmldot.Get(fragment, "user.#")           // → 3
+first := xmldot.Get(fragment, "user.0.name")      // → "Alice"
+names := xmldot.Get(fragment, "user.#.name")      // → ["Alice", "Bob", "Carol"]
+
+// Modify first matching root
+result, _ := xmldot.Set(fragment, "user.@status", "active")
+```
+
 ## Multiple Paths
 
 Get multiple paths efficiently:

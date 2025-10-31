@@ -430,19 +430,75 @@ func TestValidateLargeDocument(t *testing.T) {
 	}
 }
 
-// Multiple Root Elements Test
+// XML Fragment Support Tests (Multiple Root Elements)
 
-func TestInvalidMultipleRootElements(t *testing.T) {
-	xml := "<root1></root1><root2></root2>"
+func TestValidFragments(t *testing.T) {
+	tests := []struct {
+		name string
+		xml  string
+	}{
+		{
+			name: "two root elements",
+			xml:  "<root1></root1><root2></root2>",
+		},
+		{
+			name: "three root elements with whitespace",
+			xml:  "<root1>A</root1>  <root2>B</root2>  <root3>C</root3>",
+		},
+		{
+			name: "fragment with prolog",
+			xml:  `<?xml version="1.0"?><root1>A</root1><root2>B</root2>`,
+		},
+		{
+			name: "fragment with comments",
+			xml:  `<root1>A</root1><!-- comment --><root2>B</root2>`,
+		},
+		{
+			name: "nested elements in fragment",
+			xml:  `<root1><child>A</child></root1><root2><child>B</child></root2>`,
+		},
+		{
+			name: "self-closing roots",
+			xml:  `<root1/><root2/><root3/>`,
+		},
+		{
+			name: "mixed self-closing and paired",
+			xml:  `<root1/><root2>X</root2><root3/>`,
+		},
+		{
+			name: "empty roots",
+			xml:  `<root1></root1><root2></root2>`,
+		},
+		{
+			name: "fragment with attributes",
+			xml:  `<user id="1">Alice</user><user id="2">Bob</user>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !Valid(tt.xml) {
+				t.Errorf("Fragment should be valid: %s", tt.xml)
+			}
+			err := ValidateWithError(tt.xml)
+			if err != nil {
+				t.Errorf("Fragment should pass validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestInvalidFragmentWithTextBetweenRoots(t *testing.T) {
+	xml := `<root1>A</root1>invalid text<root2>B</root2>`
 	if Valid(xml) {
-		t.Error("XML with multiple root elements should fail validation")
+		t.Error("Text content between root elements should fail validation")
 	}
 	err := ValidateWithError(xml)
 	if err == nil {
-		t.Error("Multiple root elements should return validation error")
+		t.Error("Text between roots should return validation error")
 	}
-	if err != nil && !strings.Contains(err.Message, "multiple root") {
-		t.Errorf("Expected 'multiple root' error, got: %s", err.Message)
+	if err != nil && !strings.Contains(err.Message, "outside root element") {
+		t.Errorf("Expected 'outside root element' error, got: %s", err.Message)
 	}
 }
 
@@ -649,6 +705,41 @@ func ExampleValidateWithError() {
 		fmt.Printf("Validation error: %s\n", err.Message)
 	}
 	// Output: Validation error: mismatched closing tag 'root' (expected 'person' opened at line 1, column 6)
+}
+
+// ExampleValid_fragment demonstrates validation of XML fragments with multiple roots
+func ExampleValid_fragment() {
+	// XML fragment with multiple root elements
+	fragment := `<user id="1">Alice</user><user id="2">Bob</user>`
+
+	if Valid(fragment) {
+		fmt.Println("Fragment is valid")
+	}
+	// Output: Fragment is valid
+}
+
+// ExampleValid_fragmentWithProlog demonstrates fragment validation with XML declaration
+func ExampleValid_fragmentWithProlog() {
+	fragment := `<?xml version="1.0"?>
+<item>first</item>
+<item>second</item>`
+
+	if Valid(fragment) {
+		fmt.Println("Fragment with prolog is valid")
+	}
+	// Output: Fragment with prolog is valid
+}
+
+// ExampleValidateWithError_fragmentWithText demonstrates that text between roots is invalid
+func ExampleValidateWithError_fragmentWithText() {
+	// Text content between root elements is not allowed
+	fragment := `<item>first</item>invalid text<item>second</item>`
+
+	err := ValidateWithError(fragment)
+	if err != nil {
+		fmt.Println("Text between roots is not allowed")
+	}
+	// Output: Text between roots is not allowed
 }
 
 // ============================================================================

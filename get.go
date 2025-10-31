@@ -118,6 +118,49 @@ type searchContext struct {
 	results    *[]Result
 }
 
+// collectFragmentRoots collects all root elements matching the target name in a fragment.
+// This enables array operations on fragments: <user>A</user><user>B</user>
+// Security: Limited to MaxWildcardResults (1000) elements
+func collectFragmentRoots(parser *xmlParser, targetName string) []elementMatch {
+	var matches []elementMatch
+
+	for parser.skipToNextElement() {
+		// Security limit: prevent collecting too many roots
+		if len(matches) >= MaxWildcardResults {
+			break
+		}
+
+		parser.next() // skip '<'
+		elemName, attrs, isSelfClosing := parser.parseElementName()
+
+		// Only collect roots with matching name
+		if elemName != targetName {
+			// Skip non-matching root element
+			if !isSelfClosing {
+				parser.parseElementContent(elemName)
+			}
+			continue
+		}
+
+		// Extract content
+		var content string
+		if isSelfClosing {
+			content = ""
+		} else {
+			content = parser.parseElementContent(elemName)
+		}
+
+		matches = append(matches, elementMatch{
+			name:          elemName,
+			attrs:         attrs,
+			content:       content,
+			isSelfClosing: isSelfClosing,
+		})
+	}
+
+	return matches
+}
+
 // executeQuery recursively matches path segments against XML structure
 func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Result {
 	// Base case: we've matched all segments
@@ -127,6 +170,78 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 
 	currentSeg := segments[segIndex]
 	isLastSegment := segIndex == len(segments)-1
+
+	// Fragment root array support: Check if we're at root level (segIndex==0) with array operations
+	// This enables: <user>A</user><user>B</user> + query "user.#" → 2
+	if segIndex == 0 && !isLastSegment && currentSeg.Type == SegmentElement {
+		nextSeg := segments[1]
+		if nextSeg.Type == SegmentIndex || nextSeg.Type == SegmentCount || nextSeg.Type == SegmentFieldExtraction {
+			// Array operation on fragment roots - collect all matching roots
+			matches := collectFragmentRoots(parser, currentSeg.Value)
+
+			if len(matches) == 0 {
+				return Result{Type: Null}
+			}
+
+			// Handle the array operation
+			switch nextSeg.Type {
+			case SegmentFieldExtraction:
+				// Field extraction from fragment roots (e.g., user.#.name or user.#.%)
+				return executeFieldExtraction(matches, nextSeg)
+			case SegmentIndex:
+				// Access specific root by index
+				if nextSeg.Index >= 0 && nextSeg.Index < len(matches) {
+					match := matches[nextSeg.Index]
+
+					// Check if there are more segments after index
+					if segIndex+2 < len(segments) {
+						// Check if next segment is an attribute
+						if segments[segIndex+2].Type == SegmentAttribute {
+							attrName := segments[segIndex+2].Value
+							if attrValue, ok := match.attrs[attrName]; ok {
+								return Result{
+									Type: Attribute,
+									Str:  attrValue,
+									Raw:  attrValue,
+								}
+							}
+							return Result{Type: Null}
+						}
+
+						// Check if next segment is text content
+						if segments[segIndex+2].Type == SegmentText {
+							textContent := extractDirectTextOnly(match.content)
+							return Result{
+								Type: String,
+								Str:  unescapeXML(textContent),
+								Raw:  match.content,
+							}
+						}
+
+						// Continue matching within selected root element
+						contentParser := newXMLParser([]byte(match.content))
+						return executeQuery(contentParser, segments, segIndex+2)
+					}
+
+					// No more segments - return the indexed root element
+					return Result{
+						Type: Element,
+						Str:  unescapeXML(extractTextContent(match.content)),
+						Raw:  match.content,
+					}
+				}
+				return Result{Type: Null} // Out of bounds
+
+			case SegmentCount:
+				// Return count of matching roots
+				return Result{
+					Type: Number,
+					Num:  float64(len(matches)),
+					Str:  itoa(len(matches)),
+				}
+			}
+		}
+	}
 
 	// Handle GJSON-style filter segment (Phase 2: GJSON migration)
 	// Note: Filter segments operate on ALL elements at the current level
@@ -805,6 +920,79 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 
 	currentSeg := segments[segIndex]
 	isLastSegment := segIndex == len(segments)-1
+
+	// Fragment root array support: Check if we're at root level (segIndex==0) with array operations
+	// This enables: <user>A</user><user>B</user> + query "user.#" → 2
+	// Note: Only use fast path for case-sensitive matching; case-insensitive needs generic path
+	if segIndex == 0 && !isLastSegment && currentSeg.Type == SegmentElement && opts.CaseSensitive {
+		nextSeg := segments[1]
+		if nextSeg.Type == SegmentIndex || nextSeg.Type == SegmentCount || nextSeg.Type == SegmentFieldExtraction {
+			// Array operation on fragment roots - collect all matching roots
+			matches := collectFragmentRoots(parser, currentSeg.Value)
+
+			if len(matches) == 0 {
+				return Result{Type: Null}
+			}
+
+			// Handle the array operation
+			switch nextSeg.Type {
+			case SegmentFieldExtraction:
+				// Field extraction from fragment roots (e.g., user.#.name or user.#.%)
+				return executeFieldExtractionWithOptions(matches, nextSeg, opts)
+			case SegmentIndex:
+				// Access specific root by index
+				if nextSeg.Index >= 0 && nextSeg.Index < len(matches) {
+					match := matches[nextSeg.Index]
+
+					// Check if there are more segments after index
+					if segIndex+2 < len(segments) {
+						// Check if next segment is an attribute
+						if segments[segIndex+2].Type == SegmentAttribute {
+							attrName := segments[segIndex+2].Value
+							if attrValue, ok := match.attrs[attrName]; ok {
+								return Result{
+									Type: Attribute,
+									Str:  attrValue,
+									Raw:  attrValue,
+								}
+							}
+							return Result{Type: Null}
+						}
+
+						// Check if next segment is text content
+						if segments[segIndex+2].Type == SegmentText {
+							textContent := extractDirectTextOnly(match.content)
+							return Result{
+								Type: String,
+								Str:  unescapeXML(textContent),
+								Raw:  match.content,
+							}
+						}
+
+						// Continue matching within selected root element
+						contentParser := newXMLParser([]byte(match.content))
+						return executeQueryWithOptions(contentParser, segments, segIndex+2, opts)
+					}
+
+					// No more segments - return the indexed root element
+					return Result{
+						Type: Element,
+						Str:  unescapeXML(extractTextContent(match.content)),
+						Raw:  match.content,
+					}
+				}
+				return Result{Type: Null} // Out of bounds
+
+			case SegmentCount:
+				// Return count of matching roots
+				return Result{
+					Type: Number,
+					Num:  float64(len(matches)),
+					Str:  itoa(len(matches)),
+				}
+			}
+		}
+	}
 
 	// Handle GJSON-style filter segment (Phase 3: Options support for GJSON)
 	if currentSeg.Type == SegmentFilter && currentSeg.Filter != nil {

@@ -3097,12 +3097,6 @@ func TestValidationErrors_MalformedXML(t *testing.T) {
 			errContains: "quoted",
 		},
 		{
-			name:        "multiple root elements",
-			xml:         "<root1></root1><root2></root2>",
-			wantErr:     true,
-			errContains: "multiple root",
-		},
-		{
 			name:        "content outside root",
 			xml:         "<root></root>text outside",
 			wantErr:     true,
