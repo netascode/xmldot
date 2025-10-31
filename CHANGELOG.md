@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2025-10-31
+
 ### Fixed
 
 - **`Set()` now works with empty XML and creates sibling roots in fragments**: Previously, `Set()` would fail on empty XML or incorrectly try to nest paths under existing roots even when a different root was specified. Now:
@@ -70,7 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/netascode/xmldot/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/netascode/xmldot/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/netascode/xmldot/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/netascode/xmldot/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/netascode/xmldot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/netascode/xmldot/compare/v0.2.0...v0.3.0
