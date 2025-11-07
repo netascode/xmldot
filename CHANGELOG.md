@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2025-11-07
+
 ### Fixed
 
 - **Root-level append with `-1` index now creates siblings instead of nesting**: Previously, appending to root level (e.g., `Set("<user>Alice</user>", "item.-1", "first")`) incorrectly nested the new element inside the first root element. Now it correctly creates sibling root elements, enabling proper multi-root fragment building: `<user>Alice</user><item>first</item>`

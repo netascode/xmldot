@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-<img src="https://img.shields.io/badge/xmldot-v0.4.1-blue.svg?style=flat-square" alt="xmldot">
+<img src="https://img.shields.io/badge/xmldot-v0.4.2-blue.svg?style=flat-square" alt="xmldot">
 <br>
 <a href="https://godoc.org/github.com/netascode/xmldot"><img src="https://img.shields.io/badge/api-reference-blue.svg?style=flat-square" alt="GoDoc"></a>
 <a href="https://goreportcard.com/report/github.com/netascode/xmldot"><img src="https://goreportcard.com/badge/github.com/netascode/xmldot?style=flat-square" alt="Go Report Card"></a>
@@ -440,6 +440,11 @@ names := xmldot.Get(fragment, "user.#.name")      // → ["Alice", "Bob", "Carol
 
 // Modify first matching root
 result, _ := xmldot.Set(fragment, "user.@status", "active")
+
+// Build fragments incrementally using root-level append
+xml := `<user>Alice</user>`
+xml, _ = xmldot.Set(xml, "item.-1", "first")   // Creates sibling: <user>Alice</user><item>first</item>
+xml, _ = xmldot.Set(xml, "item.-1", "second")  // Appends sibling: <user>Alice</user><item>first</item><item>second</item>
 ```
 
 ## Multiple Paths
