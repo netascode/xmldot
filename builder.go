@@ -917,7 +917,8 @@ func (b *xmlBuilder) appendRootElement(elementSeg PathSegment, xmlValue string, 
 
 // findLastMatchPosition finds the position after the last child element
 // matching the given name within a parent element's content.
-// Returns the parent's contentStart if no matches found (empty array case).
+// Returns the parent's contentEnd if no matches found, ensuring new elements
+// are appended at the end of the parent's content (preserves document order).
 // Note: Self-closing parents are handled in appendElement before calling this function.
 func (b *xmlBuilder) findLastMatchPosition(parent *elementLocation, targetSeg PathSegment) int {
 	// If parent is self-closing, return contentStart
@@ -930,7 +931,7 @@ func (b *xmlBuilder) findLastMatchPosition(parent *elementLocation, targetSeg Pa
 	content := b.data[parent.contentStart:parent.contentEnd]
 	parser := newXMLParser(content)
 
-	lastMatchEnd := parent.contentStart // Default: start of parent content (empty array case)
+	lastMatchEnd := parent.contentEnd // Default: end of parent content (empty array case)
 
 	for parser.skipToNextElement() {
 		parser.next()

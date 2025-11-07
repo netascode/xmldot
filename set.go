@@ -19,11 +19,15 @@ import (
 //	result, _ := Set(xml, "root.item.-1", "second")
 //	// result: <root><item>first</item><item>second</item></root>
 //
-// When the array is empty, -1 creates the first element:
+// When the array is empty, -1 creates the first element at the end of parent content:
 //
 //	xml := `<root></root>`
 //	result, _ := Set(xml, "root.item.-1", "first")
 //	// result: <root><item>first</item></root>
+//
+//	xml := `<root><other>data</other></root>`
+//	result, _ := Set(xml, "root.item.-1", "first")
+//	// result: <root><other>data</other><item>first</item></root>
 //
 // Note: Only -1 is supported for append. Other negative indices return an error.
 // Note: Nested paths after -1 (e.g., "item.-1.child") are not supported.

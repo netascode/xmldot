@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Append to empty array now inserts at end of parent content**: When appending to an empty array using `-1` index (no matching elements exist), new elements are now correctly inserted at the end of the parent's content instead of the beginning. This preserves document order and matches user expectations for "append" semantics.
+  - Before: `<root><other>data</other></root>` + `root.item.-1` → `<root><item>NEW</item><other>data</other></root>`
+  - After: `<root><other>data</other></root>` + `root.item.-1` → `<root><other>data</other><item>NEW</item></root>`
+  - Non-empty arrays unchanged: Existing behavior of inserting after the last matching element is preserved
+
 ## [0.4.2] - 2025-11-07
 
 ### Fixed

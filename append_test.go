@@ -557,3 +557,183 @@ func TestSet_AppendRootLevel(t *testing.T) {
 		}
 	})
 }
+
+// TestSet_AppendToEmptyArrayEdgeCases tests the fix for appending to empty arrays.
+// Prior to v0.4.3, appending to an empty array inserted at the beginning of the parent element.
+// After v0.4.3, it correctly inserts at the end of the parent's content.
+func TestSet_AppendToEmptyArrayEdgeCases(t *testing.T) {
+	t.Run("append to empty parent with other children", func(t *testing.T) {
+		xml := `<root><other>existing</other></root>`
+		result, err := Set(xml, "root.item.-1", "new")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		// Verify new item exists
+		item := Get(result, "root.item.0")
+		if item.String() != "new" {
+			t.Errorf("item.0 = %v, want 'new'", item.String())
+		}
+
+		// Verify existing content preserved
+		other := Get(result, "root.other")
+		if other.String() != "existing" {
+			t.Errorf("other = %v, want 'existing'", other.String())
+		}
+
+		// Verify order: new item should come AFTER existing content
+		if !strings.Contains(result, "<other>existing</other><item>new</item>") {
+			t.Errorf("Expected item after other, got: %s", result)
+		}
+	})
+
+	t.Run("append to completely empty parent", func(t *testing.T) {
+		xml := `<root></root>`
+		result, err := Set(xml, "root.item.-1", "first")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		expected := `<root><item>first</item></root>`
+		if result != expected {
+			t.Errorf("got %s, want %s", result, expected)
+		}
+	})
+
+	t.Run("append to empty parent with whitespace", func(t *testing.T) {
+		xml := `<root>
+  </root>`
+		result, err := Set(xml, "root.item.-1", "value")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		// Verify item was created
+		item := Get(result, "root.item.0")
+		if item.String() != "value" {
+			t.Errorf("item.0 = %v, want 'value'", item.String())
+		}
+
+		// Should append at end (before closing tag)
+		if !strings.HasSuffix(strings.TrimSpace(result), "<item>value</item></root>") {
+			t.Errorf("Expected item at end of parent, got: %s", result)
+		}
+	})
+
+	t.Run("multiple appends to initially empty parent", func(t *testing.T) {
+		xml := `<root></root>`
+
+		result, err := Set(xml, "root.item.-1", "first")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		result, err = Set(result, "root.item.-1", "second")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		result, err = Set(result, "root.item.-1", "third")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		// Verify count
+		count := Get(result, "root.item.#")
+		if count.Int() != 3 {
+			t.Errorf("item.# = %d, want 3", count.Int())
+		}
+
+		// Verify order
+		first := Get(result, "root.item.0")
+		second := Get(result, "root.item.1")
+		third := Get(result, "root.item.2")
+
+		if first.String() != "first" {
+			t.Errorf("item.0 = %v, want 'first'", first.String())
+		}
+		if second.String() != "second" {
+			t.Errorf("item.1 = %v, want 'second'", second.String())
+		}
+		if third.String() != "third" {
+			t.Errorf("item.2 = %v, want 'third'", third.String())
+		}
+	})
+
+	t.Run("append to empty parent with mixed siblings", func(t *testing.T) {
+		xml := `<root><a>1</a><b>2</b></root>`
+		result, err := Set(xml, "root.item.-1", "new")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		// Verify all existing elements preserved
+		a := Get(result, "root.a")
+		if a.String() != "1" {
+			t.Errorf("a = %v, want '1'", a.String())
+		}
+
+		b := Get(result, "root.b")
+		if b.String() != "2" {
+			t.Errorf("b = %v, want '2'", b.String())
+		}
+
+		// Verify new item exists
+		item := Get(result, "root.item.0")
+		if item.String() != "new" {
+			t.Errorf("item.0 = %v, want 'new'", item.String())
+		}
+
+		// Verify order: item should come AFTER existing siblings
+		if !strings.Contains(result, "<a>1</a><b>2</b><item>new</item>") {
+			t.Errorf("Expected item after siblings, got: %s", result)
+		}
+	})
+
+	t.Run("regression - append to non-empty array still works", func(t *testing.T) {
+		xml := `<root><item>A</item><item>B</item></root>`
+		result, err := Set(xml, "root.item.-1", "C")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		// Should append after B (existing behavior preserved)
+		third := Get(result, "root.item.2")
+		if third.String() != "C" {
+			t.Errorf("item.2 = %v, want 'C'", third.String())
+		}
+
+		// Verify A and B unchanged
+		first := Get(result, "root.item.0")
+		second := Get(result, "root.item.1")
+		if first.String() != "A" || second.String() != "B" {
+			t.Error("Existing items corrupted")
+		}
+	})
+
+	t.Run("SetRaw append to empty parent", func(t *testing.T) {
+		xml := `<root></root>`
+		result, err := SetRaw(xml, "root.item.-1", "<name>Test</name>")
+		if err != nil {
+			t.Fatalf("SetRaw() error = %v", err)
+		}
+
+		name := Get(result, "root.item.0.name")
+		if name.String() != "Test" {
+			t.Errorf("item.0.name = %v, want 'Test'", name.String())
+		}
+	})
+
+	t.Run("deeply nested empty parent", func(t *testing.T) {
+		xml := `<root><level1><level2></level2></level1></root>`
+		result, err := Set(xml, "root.level1.level2.item.-1", "deep")
+		if err != nil {
+			t.Fatalf("Set() error = %v", err)
+		}
+
+		item := Get(result, "root.level1.level2.item.0")
+		if item.String() != "deep" {
+			t.Errorf("deep item = %v, want 'deep'", item.String())
+		}
+	})
+}
