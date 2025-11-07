@@ -753,32 +753,9 @@ func (b *xmlBuilder) appendElement(path []PathSegment, value interface{}) error 
 			return b.createElement(createPath, xmlValue, isRaw)
 		}
 	} else {
-		// Appending to root-level element
-		// Find root element as parent
-		if !parser.skipToNextElement() {
-			return ErrMalformedXML
-		}
-		elemStartPos := parser.pos
-		parser.next()
-		elemName, attrs, isSelfClosing := parser.parseElementName()
-
-		contentStart := parser.pos
-		var contentEnd int
-		if isSelfClosing {
-			contentEnd = parser.pos
-		} else {
-			_ = parser.parseElementContent(elemName)
-			contentEnd = parser.pos - len(elemName) - 3
-		}
-
-		parentLoc = &elementLocation{
-			startPos:      elemStartPos,
-			contentStart:  contentStart,
-			contentEnd:    contentEnd,
-			elementName:   elemName,
-			attrs:         attrs,
-			isSelfClosing: isSelfClosing,
-		}
+		// Appending to root-level element (e.g., "item.-1")
+		// Delegate to root-level append logic to handle multi-root fragments
+		return b.appendRootElement(elementSeg, xmlValue, isRaw)
 	}
 
 	// Handle self-closing parent - must convert to full element first
@@ -863,6 +840,71 @@ func (b *xmlBuilder) appendElement(path []PathSegment, value interface{}) error 
 	b.result.WriteString(">")
 
 	// Write rest of document
+	b.result.Write(b.data[insertPos:])
+
+	// Security check: validate final document size doesn't exceed limit
+	if b.result.Len() > MaxDocumentSize {
+		return fmt.Errorf("%w: resulting document exceeds maximum size", ErrInvalidValue)
+	}
+
+	return nil
+}
+
+// appendRootElement appends a new root-level element to XML fragments.
+// This handles multi-root XML fragments where elements should be siblings.
+//
+// Examples:
+//   - <user>Alice</user> + "item.-1" → <user>Alice</user><item>first</item>
+//   - <item>A</item><item>B</item> + "item.-1" → <item>A</item><item>B</item><item>C</item>
+//   - "" + "item.-1" → <item>first</item>
+func (b *xmlBuilder) appendRootElement(elementSeg PathSegment, xmlValue string, isRaw bool) error {
+	// Empty XML - create first element
+	if len(b.data) == 0 {
+		b.result.Reset()
+		b.result.WriteString("<")
+		b.result.WriteString(elementSeg.Value)
+		b.result.WriteString(">")
+		b.result.WriteString(xmlValue)
+		b.result.WriteString("</")
+		b.result.WriteString(elementSeg.Value)
+		b.result.WriteString(">")
+		return nil
+	}
+
+	// Find insertion point after last matching root element
+	parser := newXMLParser(b.data)
+	insertPos := len(b.data) // Default: append at end
+
+	for parser.skipToNextElement() {
+		parser.next()
+		elemName, _, isSelfClosing := parser.parseElementName()
+
+		if elementSeg.matchesWithOptions(elemName, b.opts) {
+			// Found matching root - track position after it
+			if isSelfClosing {
+				insertPos = parser.pos
+			} else {
+				_ = parser.parseElementContent(elemName)
+				insertPos = parser.pos
+			}
+		} else {
+			// Skip non-matching root elements
+			if !isSelfClosing {
+				parser.parseElementContent(elemName)
+			}
+		}
+	}
+
+	// Build result: everything before insert point + new element + rest
+	b.result.Reset()
+	b.result.Write(b.data[:insertPos])
+	b.result.WriteString("<")
+	b.result.WriteString(elementSeg.Value)
+	b.result.WriteString(">")
+	b.result.WriteString(xmlValue)
+	b.result.WriteString("</")
+	b.result.WriteString(elementSeg.Value)
+	b.result.WriteString(">")
 	b.result.Write(b.data[insertPos:])
 
 	// Security check: validate final document size doesn't exceed limit

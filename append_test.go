@@ -465,3 +465,95 @@ func TestSet_AppendDocumentSizeLimit(t *testing.T) {
 		t.Errorf("Expected size limit error, got: %v", err)
 	}
 }
+
+// TestSet_AppendRootLevel tests the fix for root-level append creating siblings instead of nesting
+func TestSet_AppendRootLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		xml      string
+		path     string
+		value    string
+		expected string
+	}{
+		{
+			name:     "append different root name creates sibling",
+			xml:      `<user>Alice</user>`,
+			path:     "item.-1",
+			value:    "first",
+			expected: `<user>Alice</user><item>first</item>`,
+		},
+		{
+			name:     "append matching root name creates sibling array",
+			xml:      `<item>A</item>`,
+			path:     "item.-1",
+			value:    "B",
+			expected: `<item>A</item><item>B</item>`,
+		},
+		{
+			name:     "append to empty XML creates first root",
+			xml:      ``,
+			path:     "item.-1",
+			value:    "first",
+			expected: `<item>first</item>`,
+		},
+		{
+			name:     "append to multi-root different name",
+			xml:      `<user>Alice</user><name>test</name>`,
+			path:     "item.-1",
+			value:    "first",
+			expected: `<user>Alice</user><name>test</name><item>first</item>`,
+		},
+		{
+			name:     "append to multi-root matching name",
+			xml:      `<item>A</item><item>B</item>`,
+			path:     "item.-1",
+			value:    "C",
+			expected: `<item>A</item><item>B</item><item>C</item>`,
+		},
+		{
+			name:     "multiple sequential appends to root level",
+			xml:      `<user>Alice</user>`,
+			path:     "item.-1",
+			value:    "first",
+			expected: `<user>Alice</user><item>first</item>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set(tt.xml, tt.path, tt.value)
+			if err != nil {
+				t.Fatalf("Set() error = %v", err)
+			}
+
+			if result != tt.expected {
+				t.Errorf("Set() = %q, want %q", result, tt.expected)
+			}
+
+			// Verify we can query the new element
+			elemName := tt.path[:len(tt.path)-3] // Remove ".-1"
+			query := Get(result, elemName)
+			if !query.Exists() {
+				t.Errorf("Element %q should exist after append", elemName)
+			}
+		})
+	}
+
+	// Test multiple sequential appends
+	t.Run("multiple sequential root appends", func(t *testing.T) {
+		xml := `<user>Alice</user>`
+		xml, _ = Set(xml, "item.-1", "first")
+		xml, _ = Set(xml, "item.-1", "second")
+
+		expected := `<user>Alice</user><item>first</item><item>second</item>`
+		if xml != expected {
+			t.Errorf("Multiple appends = %q, want %q", xml, expected)
+		}
+
+		// Verify count
+		count := Get(xml, "item.#")
+		if count.Int() != 2 {
+			t.Errorf("item.# = %d, want 2", count.Int())
+		}
+	})
+}
