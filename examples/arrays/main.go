@@ -71,8 +71,8 @@ func main() {
 	// Example 7: Iterate with ForEach (use xml3 with appended element)
 	fmt.Println("Example 7: Iterate with ForEach")
 	fmt.Println("Current items:")
-	count2 := int(xmldot.Get(xml3, "cart.items.item.#").Int())
-	for i := 0; i < count2; i++ {
+	count2 := xmldot.Get(xml3, "cart.items.item.#").Int()
+	for i := int64(0); i < count2; i++ {
 		namePath := fmt.Sprintf("cart.items.item.%d.name", i)
 		qtyPath := fmt.Sprintf("cart.items.item.%d.quantity", i)
 		name := xmldot.Get(xml3, namePath)
