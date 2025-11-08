@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-<img src="https://img.shields.io/badge/xmldot-v0.4.3-blue.svg?style=flat-square" alt="xmldot">
+<a href="https://github.com/netascode/xmldot/tags"><img src="https://img.shields.io/github/v/tag/netascode/xmldot?style=flat-square" alt="Latest Version"></a>
 <br>
 <a href="https://godoc.org/github.com/netascode/xmldot"><img src="https://img.shields.io/badge/api-reference-blue.svg?style=flat-square" alt="GoDoc"></a>
 <a href="https://goreportcard.com/report/github.com/netascode/xmldot"><img src="https://goreportcard.com/badge/github.com/netascode/xmldot?style=flat-square" alt="Go Report Card"></a>
@@ -76,7 +76,7 @@ This will print:
 The Go Programming Language
 ```
 
-## Fluent API (v0.2.0+)
+## Fluent API
 
 The fluent API enables method chaining on Result objects for cleaner, more readable code:
 
@@ -168,9 +168,9 @@ This will print:
 <catalog><book id="1"><title>The Go Programming Language</title><price>39.99</price></book></catalog>
 ```
 
-### Creating Elements with Attributes (v0.3.0+)
+### Creating Elements with Attributes
 
-Starting from v0.3.0, Set automatically creates missing parent elements when setting attributes. This makes it easy to add attributes to elements that don't yet exist:
+Set automatically creates missing parent elements when setting attributes. This makes it easy to add attributes to elements that don't yet exist:
 
 ```go
 xml := `<root></root>`
@@ -183,8 +183,6 @@ result, _ := xmldot.Set(xml, "root.user.@id", "123")
 result, _ = xmldot.Set(xml, "root.company.department.@name", "Engineering")
 // Result: <root><company><department name="Engineering"></department></company></root>
 ```
-
-Before v0.3.0, setting an attribute on a non-existent element would return an error. Now the element is automatically created.
 
 ## Path Syntax
 
