@@ -104,6 +104,20 @@ email := results[2].String()
 // Case-insensitive queries
 opts := &xmldot.Options{CaseSensitive: false}
 name := root.GetWithOptions("USER.NAME", opts).String()
+
+// Structure inspection with Map()
+user := xmldot.Get(xml, "root.user")
+m := user.Map()
+name := m["name"].String()
+age := m["age"].Int()
+
+// Iterate over all child elements
+for key, value := range m {
+    fmt.Printf("%s = %s\n", key, value.String())
+}
+
+// Map() with case-insensitive keys
+m := user.MapWithOptions(&xmldot.Options{CaseSensitive: false})
 ```
 
 **Performance**: Fluent chaining adds ~280% overhead for 3-level chains compared to full paths. For performance-critical code, use direct paths:

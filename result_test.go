@@ -1201,3 +1201,373 @@ func ExampleResult_GetWithOptions() {
 	fmt.Println(name.String())
 	// Output: Alice
 }
+
+func TestResult_Map(t *testing.T) {
+	tests := []struct {
+		name     string
+		xml      string
+		path     string
+		checkFn  func(t *testing.T, m map[string]Result)
+		wantKeys []string
+	}{
+		{
+			name: "Simple element with children",
+			xml:  `<user><name>Alice</name><age>30</age></user>`,
+			path: "user",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["name"].String() != "Alice" {
+					t.Errorf("name = %q, want %q", m["name"].String(), "Alice")
+				}
+				if m["age"].String() != "30" {
+					t.Errorf("age = %q, want %q", m["age"].String(), "30")
+				}
+			},
+			wantKeys: []string{"name", "age"},
+		},
+		{
+			name: "Duplicate elements become Array",
+			xml:  `<root><item>first</item><item>second</item><item>third</item></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if !m["item"].IsArray() {
+					t.Errorf("item should be Array type")
+				}
+				items := m["item"].Array()
+				if len(items) != 3 {
+					t.Errorf("len(items) = %d, want 3", len(items))
+				}
+				if items[0].String() != "first" {
+					t.Errorf("items[0] = %q, want %q", items[0].String(), "first")
+				}
+				if items[1].String() != "second" {
+					t.Errorf("items[1] = %q, want %q", items[1].String(), "second")
+				}
+				if items[2].String() != "third" {
+					t.Errorf("items[2] = %q, want %q", items[2].String(), "third")
+				}
+			},
+			wantKeys: []string{"item"},
+		},
+		{
+			name: "Mixed content text under % key",
+			xml:  `<p>Hello <b>world</b> everyone</p>`,
+			path: "p",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				text := m["%"].String()
+				if text != "Hello  everyone" && text != "Hello everyone" {
+					t.Errorf("%%text = %q, want %q or %q", text, "Hello  everyone", "Hello everyone")
+				}
+				if m["b"].String() != "world" {
+					t.Errorf("b = %q, want %q", m["b"].String(), "world")
+				}
+			},
+			wantKeys: []string{"%", "b"},
+		},
+		{
+			name: "Empty self-closing element",
+			xml:  `<root><empty/><value>test</value></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["empty"].String() != "" {
+					t.Errorf("empty = %q, want empty string", m["empty"].String())
+				}
+				if !m["empty"].Exists() {
+					t.Errorf("empty should exist")
+				}
+				if m["value"].String() != "test" {
+					t.Errorf("value = %q, want %q", m["value"].String(), "test")
+				}
+			},
+			wantKeys: []string{"empty", "value"},
+		},
+		{
+			name: "Namespace prefixes preserved",
+			xml:  `<soap:Envelope><soap:Body>data</soap:Body></soap:Envelope>`,
+			path: "soap:Envelope",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["soap:Body"].String() != "data" {
+					t.Errorf("soap:Body = %q, want %q", m["soap:Body"].String(), "data")
+				}
+			},
+			wantKeys: []string{"soap:Body"},
+		},
+		{
+			name: "Null type returns empty map",
+			xml:  `<root><child>value</child></root>`,
+			path: "nonexistent",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if len(m) != 0 {
+					t.Errorf("len(map) = %d, want 0", len(m))
+				}
+			},
+			wantKeys: []string{},
+		},
+		{
+			name: "Element with no children returns empty map",
+			xml:  `<root><item/></root>`,
+			path: "root.item",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if len(m) != 0 {
+					t.Errorf("len(map) = %d, want 0 (no children)", len(m))
+				}
+			},
+			wantKeys: []string{},
+		},
+		{
+			name: "Element with only children (no attributes)",
+			xml:  `<root><name>Alice</name><age>30</age></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["name"].String() != "Alice" {
+					t.Errorf("name = %q, want %q", m["name"].String(), "Alice")
+				}
+				if m["age"].String() != "30" {
+					t.Errorf("age = %q, want %q", m["age"].String(), "30")
+				}
+			},
+			wantKeys: []string{"name", "age"},
+		},
+		{
+			name: "Only immediate children (not nested)",
+			xml:  `<root><child><nested>deep</nested></child></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if len(m) != 1 {
+					t.Errorf("len(map) = %d, want 1 (only immediate child)", len(m))
+				}
+				if m["child"].String() != "deep" {
+					t.Errorf("child text = %q, want %q", m["child"].String(), "deep")
+				}
+				// Nested element should be accessible via chaining
+				nestedMap := m["child"].Map()
+				if nestedMap["nested"].String() != "deep" {
+					t.Errorf("nested via chaining = %q, want %q", nestedMap["nested"].String(), "deep")
+				}
+			},
+			wantKeys: []string{"child"},
+		},
+		{
+			name: "Comments are excluded",
+			xml:  `<root><!-- comment --><child>value</child></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if len(m) != 1 {
+					t.Errorf("len(map) = %d, want 1 (comment excluded)", len(m))
+				}
+				if m["child"].String() != "value" {
+					t.Errorf("child = %q, want %q", m["child"].String(), "value")
+				}
+			},
+			wantKeys: []string{"child"},
+		},
+		{
+			name: "Text-only content (no child elements)",
+			xml:  `<root>Just text content</root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["%"].String() != "Just text content" {
+					t.Errorf("%%text = %q, want %q", m["%"].String(), "Just text content")
+				}
+			},
+			wantKeys: []string{"%"},
+		},
+		{
+			name: "Child elements with attributes accessible via Get",
+			xml:  `<root><item id="1">value</item></root>`,
+			path: "root",
+			checkFn: func(t *testing.T, m map[string]Result) {
+				if m["item"].String() != "value" {
+					t.Errorf("item = %q, want %q", m["item"].String(), "value")
+				}
+				// Access child's attribute via separate Get call
+				itemID := Get(`<root><item id="1">value</item></root>`, "root.item.@id").String()
+				if itemID != "1" {
+					t.Errorf("item @id = %q, want %q", itemID, "1")
+				}
+			},
+			wantKeys: []string{"item"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get(tt.xml, tt.path)
+			m := result.Map()
+
+			// Check expected keys exist
+			for _, key := range tt.wantKeys {
+				if _, exists := m[key]; !exists {
+					t.Errorf("expected key %q not found in map", key)
+				}
+			}
+
+			// Run custom check function
+			if tt.checkFn != nil {
+				tt.checkFn(t, m)
+			}
+		})
+	}
+}
+
+func TestResult_Map_EdgeCases(t *testing.T) {
+	t.Run("Array type delegates to first element", func(t *testing.T) {
+		xml := `<root><user><name>Alice</name></user><user><name>Bob</name></user></root>`
+		users := Get(xml, "root.*") // Use wildcard to get Array
+		if !users.IsArray() {
+			t.Fatal("users should be Array")
+		}
+
+		m := users.Map()
+		// Should map first user's children
+		if m["name"].String() != "Alice" {
+			t.Errorf("name = %q, want %q", m["name"].String(), "Alice")
+		}
+	})
+
+	t.Run("Empty array returns empty map", func(t *testing.T) {
+		result := Result{Type: Array, Results: []Result{}}
+		m := result.Map()
+		if len(m) != 0 {
+			t.Errorf("len(map) = %d, want 0", len(m))
+		}
+	})
+
+	t.Run("Primitive types return empty map", func(t *testing.T) {
+		testCases := []struct {
+			name   string
+			result Result
+		}{
+			{"String", Result{Type: String, Str: "text"}},
+			{"Number", Result{Type: Number, Num: 42}},
+			{"Attribute", Result{Type: Attribute, Str: "attr"}},
+			{"True", Result{Type: True}},
+			{"False", Result{Type: False}},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				m := tc.result.Map()
+				if len(m) != 0 {
+					t.Errorf("%s: len(map) = %d, want 0", tc.name, len(m))
+				}
+			})
+		}
+	})
+
+	t.Run("Map chaining for nested access", func(t *testing.T) {
+		xml := `<root><company><department><team><member>Alice</member></team></department></company></root>`
+		root := Get(xml, "root")
+
+		m1 := root.Map()
+		m2 := m1["company"].Map()
+		m3 := m2["department"].Map()
+		m4 := m3["team"].Map()
+
+		if m4["member"].String() != "Alice" {
+			t.Errorf("nested access via Map chaining = %q, want %q", m4["member"].String(), "Alice")
+		}
+	})
+
+}
+
+func TestResult_MapWithOptions(t *testing.T) {
+	t.Run("Case-insensitive element names", func(t *testing.T) {
+		xml := `<root><NAME>Alice</NAME><AGE>30</AGE><Email>alice@example.com</Email></root>`
+		root := Get(xml, "root")
+		opts := &Options{CaseSensitive: false}
+
+		m := root.MapWithOptions(opts)
+
+		// All keys should be lowercase
+		if m["name"].String() != "Alice" {
+			t.Errorf("name = %q, want %q", m["name"].String(), "Alice")
+		}
+		if m["age"].String() != "30" {
+			t.Errorf("age = %q, want %q", m["age"].String(), "30")
+		}
+		if m["email"].String() != "alice@example.com" {
+			t.Errorf("email = %q, want %q", m["email"].String(), "alice@example.com")
+		}
+	})
+
+	t.Run("Case-insensitive with duplicates", func(t *testing.T) {
+		xml := `<root><Item>first</Item><ITEM>second</ITEM><item>third</item></root>`
+		root := Get(xml, "root")
+		opts := &Options{CaseSensitive: false}
+
+		m := root.MapWithOptions(opts)
+
+		// All three should be combined into lowercase "item" array
+		if !m["item"].IsArray() {
+			t.Fatal("item should be Array type")
+		}
+		items := m["item"].Array()
+		if len(items) != 3 {
+			t.Errorf("len(items) = %d, want 3", len(items))
+		}
+		if items[0].String() != "first" {
+			t.Errorf("items[0] = %q, want %q", items[0].String(), "first")
+		}
+		if items[1].String() != "second" {
+			t.Errorf("items[1] = %q, want %q", items[1].String(), "second")
+		}
+		if items[2].String() != "third" {
+			t.Errorf("items[2] = %q, want %q", items[2].String(), "third")
+		}
+	})
+
+	t.Run("Default options delegates to Map", func(t *testing.T) {
+		xml := `<root><name>Alice</name><age>30</age></root>`
+		root := Get(xml, "root")
+
+		// Default options should behave same as Map()
+		m1 := root.Map()
+		m2 := root.MapWithOptions(nil)
+		m3 := root.MapWithOptions(&Options{CaseSensitive: true})
+
+		if m1["name"].String() != m2["name"].String() {
+			t.Error("nil options should match Map()")
+		}
+		if m1["name"].String() != m3["name"].String() {
+			t.Error("default options should match Map()")
+		}
+	})
+}
+
+// ExampleResult_Map demonstrates the Map() method for structure inspection
+func ExampleResult_Map() {
+	xml := `<user id="42" status="active">
+		<name>Alice</name>
+		<age>30</age>
+		<tag>go</tag>
+		<tag>xml</tag>
+	</user>`
+
+	user := Get(xml, "user")
+	m := user.Map()
+
+	// Access parent attributes separately (not in map)
+	id := Get(xml, "user.@id")
+	status := Get(xml, "user.@status")
+	fmt.Println("ID:", id.String())
+	fmt.Println("Status:", status.String())
+
+	// Access child elements via map
+	fmt.Println("Name:", m["name"].String())
+	fmt.Println("Age:", m["age"].String())
+
+	// Access duplicate elements (Array)
+	fmt.Println("Tags:")
+	for _, tag := range m["tag"].Array() {
+		fmt.Println("  -", tag.String())
+	}
+
+	// Output:
+	// ID: 42
+	// Status: active
+	// Name: Alice
+	// Age: 30
+	// Tags:
+	//   - go
+	//   - xml
+}

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Map()` and `MapWithOptions()` methods for structure inspection**: New fluent API methods return immediate children as `map[string]Result` for dynamic field access and introspection.
+  - `result.Map()` returns child elements with duplicate names combined into Array Results
+  - `result.MapWithOptions()` supports case-insensitive element name matching
+  - Mixed content text stored under `"%"` key
+  - Security limits enforced (max 1000 children, silent truncation)
+
 ## [0.4.3] - 2025-11-07
 
 ### Fixed
