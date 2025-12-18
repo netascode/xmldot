@@ -286,7 +286,18 @@ func (r Result) Get(path string) Result {
 		return r.Results[0].Get(path)
 	}
 
-	// Element type: re-parse Raw XML using zero-copy helper
+	// Element type: Check if Raw contains multi-root fragment
+	// Multi-root fragments need special handling for array operations (#, #.field, indexing)
+	// Example: <user>A</user><user>B</user> requires wrapping for "user.#" to work
+	if isMultiRootFragment(r.Raw) {
+		// Wrap fragment in temporary root element
+		wrapped := "<_xmldot_root>" + r.Raw + "</_xmldot_root>"
+		// Prepend root to path and query
+		result := GetString(wrapped, "_xmldot_root."+path)
+		return result
+	}
+
+	// Single-root element: re-parse Raw XML using zero-copy helper
 	return GetString(r.Raw, path)
 }
 
@@ -374,7 +385,17 @@ func (r Result) GetWithOptions(path string, opts *Options) Result {
 		return r.Results[0].GetWithOptions(path, opts)
 	}
 
-	// Element type: re-parse Raw XML with options using zero-copy helper
+	// Element type: Check if Raw contains multi-root fragment
+	// Multi-root fragments need special handling for array operations (#, #.field, indexing)
+	if isMultiRootFragment(r.Raw) {
+		// Wrap fragment in temporary root element
+		wrapped := "<_xmldot_root>" + r.Raw + "</_xmldot_root>"
+		// Prepend root to path and query
+		result := GetStringWithOptions(wrapped, "_xmldot_root."+path, opts)
+		return result
+	}
+
+	// Single-root element: re-parse Raw XML with options using zero-copy helper
 	return GetStringWithOptions(r.Raw, path, opts)
 }
 
@@ -684,4 +705,82 @@ func addChildToMap(m map[string]Result, name string, child Result) {
 		Type:    Array,
 		Results: results,
 	}
+}
+
+// isMultiRootFragment detects if XML content contains multiple root-level elements.
+// This is used to identify multi-root fragments that need special handling for
+// array operations (#, #.field, indexing) in Result.Get().
+//
+// A multi-root fragment looks like: <user>A</user><user>B</user><user>C</user>
+// vs single root: <name>value</name> or nested: <user><name>A</name></user>
+//
+// Detection algorithm: Count root-level opening tags by tracking nesting depth.
+// Returns true if count > 1.
+//
+// Performance: O(n) scan but typically very fast since we return early after
+// finding the second root element.
+func isMultiRootFragment(xml string) bool {
+	if len(xml) == 0 {
+		return false
+	}
+
+	rootCount := 0
+	depth := 0
+	inTag := false
+	isSelfClosing := false
+	length := len(xml)
+
+	for i := 0; i < length; i++ {
+		char := xml[i]
+
+		if !inTag {
+			if char == '<' {
+				// Start of tag
+				inTag = true
+				isSelfClosing = false
+
+				// Look ahead to determine tag type
+				if i+1 < length {
+					nextChar := xml[i+1]
+
+					// Skip closing tags, comments, CDATA, processing instructions
+					if nextChar == '/' || nextChar == '!' || nextChar == '?' {
+						continue
+					}
+
+					// This is an opening tag
+					if depth == 0 {
+						// Root-level opening tag
+						rootCount++
+						if rootCount > 1 {
+							return true // Early exit: found multi-root
+						}
+					}
+					depth++
+				}
+			}
+		} else {
+			// Inside a tag
+			if char == '/' && i+1 < length && xml[i+1] == '>' {
+				// Mark as self-closing
+				isSelfClosing = true
+			} else if char == '>' {
+				// End of tag
+				inTag = false
+
+				// Adjust depth for self-closing and closing tags
+				if isSelfClosing {
+					depth--
+					isSelfClosing = false
+				}
+			}
+
+			// Check for closing tag pattern </
+			if char == '/' && i > 0 && xml[i-1] == '<' {
+				depth--
+			}
+		}
+	}
+
+	return false
 }

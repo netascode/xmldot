@@ -1571,3 +1571,275 @@ func ExampleResult_Map() {
 	//   - go
 	//   - xml
 }
+
+// ============================================================================
+// Multi-Root Fragment Tests (Result.Get with array operations)
+// ============================================================================
+
+// TestResult_Get_MultiRootFieldExtraction tests #.field extraction on multi-root fragments
+func TestResult_Get_MultiRootFieldExtraction(t *testing.T) {
+	xml := `<root>
+		<filter>
+			<arpacl>FILTER2</arpacl>
+			<vlan>
+				<vlan-range>10</vlan-range>
+				<static></static>
+			</vlan>
+			<vlan>
+				<vlan-range>100</vlan-range>
+			</vlan>
+		</filter>
+	</root>`
+
+	// Get filter element (contains multi-root fragment: arpacl + multiple vlans)
+	filterResult := Get(xml, "root.filter")
+	if !filterResult.Exists() {
+		t.Fatal("Expected filter to exist")
+	}
+
+	// Test #.field extraction on multi-root siblings
+	vlanRanges := filterResult.Get("vlan.#.vlan-range")
+
+	if !vlanRanges.IsArray() {
+		t.Errorf("Expected array result for field extraction, got type %v", vlanRanges.Type)
+	}
+
+	if len(vlanRanges.Results) != 2 {
+		t.Errorf("Expected 2 vlan-range results, got %d", len(vlanRanges.Results))
+	}
+
+	if len(vlanRanges.Results) >= 2 {
+		if vlanRanges.Results[0].String() != "10" {
+			t.Errorf("Expected vlan-range[0] = '10', got '%s'", vlanRanges.Results[0].String())
+		}
+		if vlanRanges.Results[1].String() != "100" {
+			t.Errorf("Expected vlan-range[1] = '100', got '%s'", vlanRanges.Results[1].String())
+		}
+	}
+}
+
+// TestResult_Get_MultiRootCount tests array count (#) on multi-root fragments
+func TestResult_Get_MultiRootCount(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>A</name></item>
+			<item><name>B</name></item>
+			<item><name>C</name></item>
+		</items>
+	</root>`
+
+	items := Get(xml, "root.items")
+	count := items.Get("item.#")
+
+	if count.Type != Number {
+		t.Errorf("Expected Number type for count, got %v", count.Type)
+	}
+
+	if count.Int() != 3 {
+		t.Errorf("Expected count = 3, got %d", count.Int())
+	}
+}
+
+// TestResult_Get_MultiRootIndexed tests indexed access on multi-root fragments
+func TestResult_Get_MultiRootIndexed(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>Alice</name></item>
+			<item><name>Bob</name></item>
+			<item><name>Carol</name></item>
+		</items>
+	</root>`
+
+	items := Get(xml, "root.items")
+
+	// Access by index
+	first := items.Get("item.0.name")
+	if first.String() != "Alice" {
+		t.Errorf("Expected item.0.name = 'Alice', got '%s'", first.String())
+	}
+
+	second := items.Get("item.1.name")
+	if second.String() != "Bob" {
+		t.Errorf("Expected item.1.name = 'Bob', got '%s'", second.String())
+	}
+
+	last := items.Get("item.2.name")
+	if last.String() != "Carol" {
+		t.Errorf("Expected item.2.name = 'Carol', got '%s'", last.String())
+	}
+}
+
+// TestResult_Get_MultiRootAttributeExtraction tests #.@attr extraction
+func TestResult_Get_MultiRootAttributeExtraction(t *testing.T) {
+	xml := `<root>
+		<users>
+			<user id="1"><name>Alice</name></user>
+			<user id="2"><name>Bob</name></user>
+			<user id="3"><name>Carol</name></user>
+		</users>
+	</root>`
+
+	users := Get(xml, "root.users")
+	ids := users.Get("user.#.@id")
+
+	if !ids.IsArray() {
+		t.Errorf("Expected array result for attribute extraction, got type %v", ids.Type)
+	}
+
+	if len(ids.Results) != 3 {
+		t.Errorf("Expected 3 id results, got %d", len(ids.Results))
+	}
+
+	expectedIDs := []string{"1", "2", "3"}
+	for i, expected := range expectedIDs {
+		if i < len(ids.Results) && ids.Results[i].String() != expected {
+			t.Errorf("Expected id[%d] = '%s', got '%s'", i, expected, ids.Results[i].String())
+		}
+	}
+}
+
+// TestResult_Get_MultiRootTextExtraction tests #.% text extraction
+func TestResult_Get_MultiRootTextExtraction(t *testing.T) {
+	xml := `<root>
+		<messages>
+			<msg>Hello</msg>
+			<msg>World</msg>
+			<msg>Test</msg>
+		</messages>
+	</root>`
+
+	messages := Get(xml, "root.messages")
+	texts := messages.Get("msg.#.%")
+
+	if !texts.IsArray() {
+		t.Errorf("Expected array result for text extraction, got type %v", texts.Type)
+	}
+
+	if len(texts.Results) != 3 {
+		t.Errorf("Expected 3 text results, got %d", len(texts.Results))
+	}
+
+	expectedTexts := []string{"Hello", "World", "Test"}
+	for i, expected := range expectedTexts {
+		if i < len(texts.Results) && texts.Results[i].String() != expected {
+			t.Errorf("Expected text[%d] = '%s', got '%s'", i, expected, texts.Results[i].String())
+		}
+	}
+}
+
+// TestResult_Get_SingleRootUnaffected tests that single-root elements still work
+func TestResult_Get_SingleRootUnaffected(t *testing.T) {
+	xml := `<root>
+		<user>
+			<name>Alice</name>
+			<age>30</age>
+		</user>
+	</root>`
+
+	user := Get(xml, "root.user")
+	name := user.Get("name")
+
+	if name.String() != "Alice" {
+		t.Errorf("Expected name = 'Alice', got '%s'", name.String())
+	}
+
+	age := user.Get("age")
+	if age.String() != "30" {
+		t.Errorf("Expected age = '30', got '%s'", age.String())
+	}
+}
+
+// TestResult_GetWithOptions_MultiRootFieldExtraction tests options work with multi-root
+func TestResult_GetWithOptions_MultiRootFieldExtraction(t *testing.T) {
+	xml := `<root>
+		<items>
+			<item><name>Alice</name></item>
+			<item><name>Bob</name></item>
+		</items>
+	</root>`
+
+	opts := &Options{CaseSensitive: false}
+	items := Get(xml, "root.items")
+
+	// Test field extraction with options on multi-root fragment
+	names := items.GetWithOptions("item.#.name", opts)
+
+	if !names.IsArray() {
+		t.Errorf("Expected array result, got type %v", names.Type)
+	}
+
+	if len(names.Results) != 2 {
+		t.Errorf("Expected 2 name results, got %d", len(names.Results))
+	}
+
+	expectedNames := []string{"Alice", "Bob"}
+	for i, expected := range expectedNames {
+		if i < len(names.Results) && names.Results[i].String() != expected {
+			t.Errorf("Expected name[%d] = '%s', got '%s'", i, expected, names.Results[i].String())
+		}
+	}
+}
+
+// TestIsMultiRootFragment tests the helper function directly
+func TestIsMultiRootFragment(t *testing.T) {
+	tests := []struct {
+		name     string
+		xml      string
+		expected bool
+	}{
+		{
+			name:     "Multiple roots",
+			xml:      "<user>A</user><user>B</user>",
+			expected: true,
+		},
+		{
+			name:     "Multiple different roots",
+			xml:      "<name>Alice</name><age>30</age>",
+			expected: true,
+		},
+		{
+			name:     "Single root",
+			xml:      "<user><name>Alice</name></user>",
+			expected: false,
+		},
+		{
+			name:     "Single root with nested siblings",
+			xml:      "<root><child>A</child><child>B</child></root>",
+			expected: false,
+		},
+		{
+			name:     "Empty string",
+			xml:      "",
+			expected: false,
+		},
+		{
+			name:     "Whitespace between roots",
+			xml:      "  <user>A</user>  \n  <user>B</user>  ",
+			expected: true,
+		},
+		{
+			name:     "Self-closing multiple roots",
+			xml:      "<item/><item/>",
+			expected: true,
+		},
+		{
+			name:     "Single self-closing",
+			xml:      "<item/>",
+			expected: false,
+		},
+		{
+			name:     "With comments",
+			xml:      "<!-- comment --><user>A</user><user>B</user>",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isMultiRootFragment(tt.xml)
+			if result != tt.expected {
+				t.Errorf("isMultiRootFragment(%q) = %v, want %v", tt.xml, result, tt.expected)
+			}
+		})
+	}
+}

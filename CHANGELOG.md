@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Result.Get()` array operations now work on multi-root fragments**: Fixed bug where array operations (`#`, `#.field`, indexed access) failed when called via `Result.Get()` on Element results containing multiple sibling elements.
+
 ## [0.5.0] - 2025-11-08
 
 ### Added
