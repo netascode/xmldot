@@ -378,6 +378,9 @@ func TestValidateMultipleErrors(t *testing.T) {
 // Security Validation Tests
 
 func TestValidateRespectsSecurityLimits(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	// Test MaxDocumentSize
 	tooLarge := make([]byte, MaxDocumentSize+1)
 	for i := range tooLarge {

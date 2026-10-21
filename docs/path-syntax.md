@@ -817,15 +817,15 @@ result := xmldot.Get(xml, "root.**.#(price>100)#")  // ~ 2-10µs depending on ma
 
 ### Wildcard Result Limits
 
-Recursive wildcards are capped at 1000 results for security:
+Recursive wildcards are limited to `MaxWildcardResults` (100,000) results for security:
 
 ```go
-// Security: Large result sets are limited
-const MaxWildcardResults = 1000
-
-// If document has >1000 matching elements, only first 1000 are returned
+// If the document has more matching elements than the limit, the query fails
+// instead of returning a truncated result
 result := xmldot.Get(largeXML, "root.**.item")
-count := len(result.Array())  // Maximum 1000
+if result.Err != nil {
+    // errors.Is(result.Err, xmldot.ErrLimitExceeded) == true
+}
 ```
 
 ### Wildcard with Attributes
@@ -971,6 +971,31 @@ nonEngrs := xmldot.Get(xml, "employees.employee.#(dept!=Engineering).name")
 fmt.Println(nonEngrs.String())  // → "Bob"
 ```
 
+### Nested Paths and Values with Dots
+
+The condition path can reach below the filtered element, and values may contain
+dots, such as decimals or quoted strings:
+
+```go
+xml := `
+<products>
+    <product><name>Laptop</name><price>999.99</price><specs><cpu>M4</cpu></specs></product>
+    <product><name>Mouse</name><price>29.99</price><specs><cpu>none</cpu></specs></product>
+</products>`
+
+// Condition on a nested element
+result := xmldot.Get(xml, "products.product.#(specs.cpu==M4).name")
+fmt.Println(result.String())  // → "Laptop"
+
+// Decimal value
+result = xmldot.Get(xml, "products.product.#(price==29.99).name")
+fmt.Println(result.String())  // → "Mouse"
+
+// Quoted value
+result = xmldot.Get(xml, `products.product.#(price=="999.99").name`)
+fmt.Println(result.String())  // → "Laptop"
+```
+
 ### Attribute Filters
 
 Filter by attribute values using `@` prefix:
@@ -1099,12 +1124,12 @@ result := xmldot.Get(xml, "root.**.#(price<100)")  // ~ 5-20µs depending on dep
 Filters have security limits to prevent DoS:
 
 ```go
-const MaxFilterDepth = 10              // Max recursion depth
-const MaxFilterExpressionLength = 256  // Max filter string length
+xmldot.MaxFilterExpressionLength // 4096: max filter string length
+xmldot.MaxPatternIterations      // step budget for % and !% pattern matches
 
-// Security: Complex nested filters are limited
-result := xmldot.Get(xml, "root.#(a.#(b.#(c.#(d.#(e.#(f.#(g.#(h.#(i.#(j>10))))))))))
-// Exceeds MaxFilterDepth, returns Null
+// Security: Overly long filter expressions are rejected
+result := xmldot.Get(xml, "root.item.#("+strings.Repeat("a", 5000)+"==1)")
+// Returns Null with result.Err set to a *LimitError for MaxFilterExpressionLength
 ```
 
 **Example: E-commerce Product Search**
@@ -1579,12 +1604,15 @@ result := xmldot.Get(xml, "root.item")
 ### Security: Prefix Length Limit
 
 ```go
-const MaxNamespacePrefixLength = 256
+xmldot.MaxNamespacePrefixLength // 256 bytes by default
 
-// Security: Extremely long prefixes are rejected
+// In documents, an element name with an oversized prefix is treated as unprefixed
 xml := `<` + strings.Repeat("a", 300) + `:element>value</element>`
 result := xmldot.Get(xml, "element")
-// Treats oversized prefix as unprefixed element
+
+// In paths, oversized prefixes are rejected
+result = xmldot.Get(xml, strings.Repeat("a", 300)+":element")
+// Returns Null with result.Err set to a *LimitError for MaxNamespacePrefixLength
 ```
 
 **Example: SOAP Message Handling**
@@ -1705,6 +1733,10 @@ result := xmldot.Get(xml, "items.item.#(@name==file\\.txt)")
 fmt.Println(result.String())  // → "Content"
 ```
 
+In comparison values, `\x` stands for `x`, so `\'` puts a quote inside a quoted
+value. In `%` and `!%` patterns the escapes `\*`, `\?` and `\\` match a literal
+`*`, `?` and `\`. A quoted value must end with an unescaped closing quote.
+
 ---
 
 ## Path Composition
@@ -1806,13 +1838,14 @@ fastPath := "items.item.#(@category==electronics)"  // Direct attribute check
 ### Path Length Considerations
 
 ```go
-// Maximum 100 segments
-const MaxPathSegments = 100
+// Maximum 100 segments by default
+xmldot.MaxPathSegments
 
 // Security: Paths exceeding limit are rejected
 longPath := "root" + strings.Repeat(".child", 150)
 result := xmldot.Get(xml, longPath)
 fmt.Println(result.Exists())  // → false (exceeds limit)
+fmt.Println(result.Err)       // → security limit exceeded: MaxPathSegments ...
 ```
 
 ---
@@ -1905,19 +1938,20 @@ xmldot.Get(xml, "items.item.0")  // After knowing it's sorted
 
 ### Security Limits Summary
 
-All security limits with performance impact:
+All security limits are package variables. Exceeding any of them fails the query
+with a `*LimitError` in `Result.Err` instead of returning a partial result:
 
-| Limit | Default Value | Performance Impact |
-|-------|---------------|-------------------|
-| MaxDocumentSize | 10MB | Rejects large docs |
-| MaxNestingDepth | 100 levels | Truncates deep nesting |
-| MaxAttributes | 100 per element | Ignores excess attrs |
-| MaxTokenSize | 1MB | Truncates large tokens |
-| MaxPathSegments | 100 segments | Rejects long paths |
-| MaxFilterDepth | 10 levels | Limits filter recursion |
-| MaxFilterExpressionLength | 256 bytes | Rejects long filters |
-| MaxWildcardResults | 1000 results | Caps wildcard matches |
-| MaxRecursiveOperations | 10000 ops | Prevents CPU exhaustion |
+| Limit | Default Value |
+|-------|---------------|
+| MaxDocumentSize | 100 MB |
+| MaxNestingDepth | 100 levels |
+| MaxAttributes | 1000 per element |
+| MaxTokenSize | 1 MB |
+| MaxPathSegments | 100 segments |
+| MaxFilterExpressionLength | 4096 bytes |
+| MaxArrayResults | 100,000 results |
+| MaxWildcardResults | 100,000 results |
+| MaxRecursiveOperations | 10,000 ops minimum, scales with document size |
 
 For more details, see [docs/performance.md](performance.md) and [docs/security.md](security.md).
 

@@ -62,17 +62,21 @@
 // This package implements multiple security protections to prevent common
 // XML vulnerabilities and denial-of-service attacks:
 //
-//   - Document size limits (MaxDocumentSize: 10MB)
+//   - Document and value size limits (MaxDocumentSize, MaxValueSize: 100 MB)
 //   - Nesting depth limits (MaxNestingDepth: 100 levels)
-//   - Attribute limits (MaxAttributes: 100 per element)
-//   - Token size limits (MaxTokenSize: 1MB)
-//   - Wildcard result limits (MaxWildcardResults: 1000)
-//   - CPU exhaustion protection (MaxRecursiveOperations: 10000)
+//   - Attribute limits (MaxAttributes: 1000 per element)
+//   - Token size limits (MaxTokenSize: 1 MB)
+//   - Array and recursive wildcard result limits (MaxArrayResults, MaxWildcardResults: 100000)
+//   - CPU exhaustion protection (MaxRecursiveOperations, MaxPatternIterations)
+//   - Filter and path limits (MaxFilterExpressionLength, MaxPathSegments)
 //   - XXE attack prevention (DOCTYPE declarations skipped)
 //   - No entity expansion (entities not processed)
 //
-// All limits are enforced automatically and can be adjusted by modifying
-// the constants in parser.go if needed for trusted documents.
+// Exceeding a limit fails the operation instead of returning a partial result:
+// Get returns a Null Result whose Err field holds a *LimitError, and Set and
+// Delete return the *LimitError. Use errors.Is(err, ErrLimitExceeded) to detect
+// limit violations. The limits are package variables that applications
+// processing trusted documents can adjust once during initialization.
 //
 // # Path Syntax
 //

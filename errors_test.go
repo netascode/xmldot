@@ -51,12 +51,13 @@ func TestErrorTypes(t *testing.T) {
 		{
 			name: "document too large",
 			fn: func() error {
+				defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 				largeXML := strings.Repeat("<item>x</item>", 1000000)
 				xml := "<root>" + largeXML + "</root>"
 				_, err := Set(xml, "root.item", "new")
 				return err
 			},
-			wantType: ErrMalformedXML,
+			wantType: ErrLimitExceeded,
 		},
 		{
 			name: "invalid value - SetRaw with unclosed tag",
@@ -350,6 +351,9 @@ func TestErrorWrapping(t *testing.T) {
 
 // TestNoPanicsOnErrors verifies no panics occur during error conditions
 func TestNoPanicsOnErrors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name string
 		fn   func()
@@ -589,6 +593,7 @@ func TestSetManyErrors_PartialSuccess(t *testing.T) {
 
 // TestSetManyErrors_DocumentTooLarge tests SetMany with large document
 func TestSetManyErrors_DocumentTooLarge(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 	largeXML := strings.Repeat("<item>x</item>", 1000000)
 	xml := "<root>" + largeXML + "</root>"
 	paths := []string{"root.a"}
@@ -604,8 +609,8 @@ func TestSetManyErrors_DocumentTooLarge(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for document too large")
 	}
-	if !errors.Is(err, ErrMalformedXML) {
-		t.Errorf("Expected ErrMalformedXML, got %v", err)
+	if !errors.Is(err, ErrLimitExceeded) {
+		t.Errorf("Expected ErrLimitExceeded, got %v", err)
 	}
 	// Original XML should be unchanged
 	if result != xml {
@@ -802,6 +807,7 @@ func TestDeleteManyErrors_PartialSuccess(t *testing.T) {
 
 // TestDeleteManyErrors_DocumentTooLarge tests DeleteMany with large document
 func TestDeleteManyErrors_DocumentTooLarge(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 	largeXML := strings.Repeat("<item>x</item>", 1000000)
 	xml := "<root>" + largeXML + "</root>"
 	paths := []string{"root.item"}
@@ -816,8 +822,8 @@ func TestDeleteManyErrors_DocumentTooLarge(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for document too large")
 	}
-	if !errors.Is(err, ErrMalformedXML) {
-		t.Errorf("Expected ErrMalformedXML, got %v", err)
+	if !errors.Is(err, ErrLimitExceeded) {
+		t.Errorf("Expected ErrLimitExceeded, got %v", err)
 	}
 	// Original XML should be unchanged
 	if result != xml {
@@ -1167,6 +1173,7 @@ func TestDeleteErrors_NonExistentPath(t *testing.T) {
 // TestDeleteErrors_DocumentTooLarge tests Delete with documents exceeding size limits
 func TestDeleteErrors_DocumentTooLarge(t *testing.T) {
 	// Create XML larger than MaxDocumentSize
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 	largeXML := strings.Repeat("<item>x</item>", 1000000)
 	xml := "<root>" + largeXML + "</root>"
 
@@ -1180,8 +1187,8 @@ func TestDeleteErrors_DocumentTooLarge(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for document too large")
 	}
-	if !errors.Is(err, ErrMalformedXML) {
-		t.Errorf("Expected ErrMalformedXML for large document, got %v", err)
+	if !errors.Is(err, ErrLimitExceeded) {
+		t.Errorf("Expected ErrLimitExceeded for large document, got %v", err)
 	}
 	// Original XML should be unchanged
 	if result != xml {
@@ -1590,6 +1597,7 @@ func TestGetErrors_InvalidModifierSyntax(t *testing.T) {
 // TestGetErrors_DocumentTooLarge tests Get with documents exceeding size limits
 func TestGetErrors_DocumentTooLarge(t *testing.T) {
 	// Create XML larger than MaxDocumentSize
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 	largeXML := strings.Repeat("<item>x</item>", 1000000)
 	xml := "<root>" + largeXML + "</root>"
 
@@ -1600,10 +1608,11 @@ func TestGetErrors_DocumentTooLarge(t *testing.T) {
 	}()
 
 	result := Get(xml, "root.item")
-	// Should handle gracefully (return Null or truncated result)
+	// Should fail with a size limit error, never a truncated result
 	if result.Type != Null {
-		t.Logf("Large document returned result type: %v", result.Type)
+		t.Errorf("Large document returned result type: %v", result.Type)
 	}
+	requireLimitError(t, result.Err, "MaxDocumentSize")
 }
 
 // TestGetErrors_PathTooDeep tests Get with extremely deep paths
@@ -1711,6 +1720,9 @@ func TestGetErrors_InvalidXMLCharacters(t *testing.T) {
 
 // TestGetErrors_ConcurrentInvalidAccess tests concurrent Get with invalid data
 func TestGetErrors_ConcurrentInvalidAccess(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	malformedXMLs := []string{
 		"<root><unclosed>",
 		"<root><item>value</wrong></root>",
@@ -1772,6 +1784,9 @@ func TestGetErrors_WildcardEdgeCases(t *testing.T) {
 
 // TestGetBytes_Errors tests GetBytes error handling
 func TestGetBytes_Errors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name string
 		xml  []byte
@@ -1863,6 +1878,9 @@ func TestGetMany_Errors(t *testing.T) {
 
 // TestGetWithOptions_ErrorPaths tests GetWithOptions error handling
 func TestGetWithOptions_ErrorPaths(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name string
 		xml  string
@@ -1974,6 +1992,9 @@ func TestOptionsErrors_InvalidOptions(t *testing.T) {
 
 // TestGetWithOptions_OptionsErrors tests GetWithOptions error handling with various options
 func TestGetWithOptions_OptionsErrors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name string
 		xml  string
@@ -2030,6 +2051,9 @@ func TestGetWithOptions_OptionsErrors(t *testing.T) {
 
 // TestSetWithOptions_OptionsErrors tests SetWithOptions error handling with various options
 func TestSetWithOptions_OptionsErrors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name    string
 		xml     string
@@ -2173,6 +2197,9 @@ func TestOptions_CaseInsensitiveErrors(t *testing.T) {
 
 // TestGetBytesWithOptions_Errors tests GetBytesWithOptions error handling
 func TestGetBytesWithOptions_Errors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name string
 		xml  []byte
@@ -2759,6 +2786,7 @@ func TestSetErrors_RawXMLValidation(t *testing.T) {
 // TestSetErrors_DocumentTooLarge tests Set with documents exceeding size limits
 func TestSetErrors_DocumentTooLarge(t *testing.T) {
 	// Create XML larger than MaxDocumentSize
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
 	largeXML := strings.Repeat("<item>x</item>", 1000000)
 	xml := "<root>" + largeXML + "</root>"
 
@@ -2772,8 +2800,8 @@ func TestSetErrors_DocumentTooLarge(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for document too large")
 	}
-	if !errors.Is(err, ErrMalformedXML) {
-		t.Errorf("Expected ErrMalformedXML for large document, got %v", err)
+	if !errors.Is(err, ErrLimitExceeded) {
+		t.Errorf("Expected ErrLimitExceeded for large document, got %v", err)
 	}
 	// Original XML should be unchanged
 	if result != xml {
@@ -2783,9 +2811,11 @@ func TestSetErrors_DocumentTooLarge(t *testing.T) {
 
 // TestSetErrors_ValueTooLarge tests Set with values that would make document too large
 func TestSetErrors_ValueTooLarge(t *testing.T) {
+	defer withLimit(&MaxValueSize, 1<<20)()
+
 	xml := "<root/>"
-	// Create a value that would make the document exceed MaxDocumentSize
-	largeValue := strings.Repeat("x", MaxDocumentSize)
+	// Create a value that exceeds MaxValueSize
+	largeValue := strings.Repeat("x", MaxValueSize+1)
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -2793,13 +2823,11 @@ func TestSetErrors_ValueTooLarge(t *testing.T) {
 		}
 	}()
 
-	// This may or may not error depending on implementation
-	// But it should not panic
 	result, err := Set(xml, "root.item", largeValue)
-	if err != nil {
-		t.Logf("Set returned error for large value: %v", err)
+	requireLimitError(t, err, "MaxValueSize")
+	if result != xml {
+		t.Error("Expected original XML on error")
 	}
-	_ = result
 }
 
 // TestSetBytes_Errors tests SetBytes error handling
@@ -2869,6 +2897,9 @@ func TestSetBytes_Errors(t *testing.T) {
 
 // TestSetWithOptions_ErrorPaths tests SetWithOptions error handling
 func TestSetWithOptions_ErrorPaths(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name    string
 		xml     string
@@ -3220,6 +3251,9 @@ func TestValidationErrors_AsError(t *testing.T) {
 
 // TestValidationErrors_SecurityLimits tests validation respects security limits
 func TestValidationErrors_SecurityLimits(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name        string
 		buildXML    func() string

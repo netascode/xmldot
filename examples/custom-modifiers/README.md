@@ -328,8 +328,10 @@ Custom modifiers execute in your application's process space with full privilege
 The framework limits modifier chains to 20 by default to prevent stack overflow:
 
 ```go
-const MaxModifierChainDepth = 20
+xmldot.MaxModifierChainDepth // 20 by default
 ```
+
+Longer chains fail with a `*LimitError` in `Result.Err`.
 
 Design modifiers to be composable but efficient. Avoid modifiers that internally chain many operations.
 

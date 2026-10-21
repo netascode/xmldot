@@ -5,6 +5,7 @@ package xmldot
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -392,20 +393,23 @@ func TestWildcardPerformance(t *testing.T) {
 
 // TestWildcardResultLimit tests that wildcard queries respect MaxWildcardResults limit
 func TestWildcardResultLimit(t *testing.T) {
-	// Generate XML with many matching elements
-	xml := "<root>"
+	defer withLimit(&MaxWildcardResults, 1000)()
+
+	// Generate XML with more matching elements than the limit
+	var sb strings.Builder
+	sb.WriteString("<root>")
 	for i := 0; i < MaxWildcardResults+100; i++ {
-		xml += "<item>value</item>"
+		sb.WriteString("<item>value</item>")
 	}
-	xml += "</root>"
+	sb.WriteString("</root>")
 
-	result := Get(xml, "root.**item")
-	results := result.Array()
+	result := Get(sb.String(), "root.**.item")
 
-	// Should be limited to MaxWildcardResults
-	if len(results) > MaxWildcardResults {
-		t.Errorf("Expected at most %d results, got %d", MaxWildcardResults, len(results))
+	// Should fail rather than return a truncated result
+	if result.Exists() {
+		t.Errorf("Expected Null result, got %d results", len(result.Array()))
 	}
+	requireLimitError(t, result.Err, "MaxWildcardResults")
 }
 
 // TestForEachWithWildcard tests the ForEach method with wildcard results

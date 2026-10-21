@@ -91,6 +91,9 @@ func TestSecurity_WideNesting(t *testing.T) {
 
 // TestSecurity_LargeDocument tests that large documents are rejected
 func TestSecurity_LargeDocument(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	// Create a document just under the limit
 	belowLimit := make([]byte, MaxDocumentSize-100)
 	for i := range belowLimit {
@@ -482,10 +485,10 @@ func TestFieldExtractionSecurityNestedExtractionDoS(t *testing.T) {
 	}
 }
 
-// TestFieldExtractionSecurityLargeResultSet tests MaxWildcardResults enforcement
+// TestFieldExtractionSecurityLargeResultSet tests MaxArrayResults enforcement
 func TestFieldExtractionSecurityLargeResultSet(t *testing.T) {
-	// Create XML with more items than MaxWildcardResults
-	itemCount := MaxWildcardResults + 500
+	// Create XML with more items than MaxArrayResults
+	itemCount := MaxArrayResults + 500
 	var b strings.Builder
 	b.WriteString("<root><items>")
 	for i := 0; i < itemCount; i++ {
@@ -495,20 +498,12 @@ func TestFieldExtractionSecurityLargeResultSet(t *testing.T) {
 	xml := b.String()
 
 	result := Get(xml, "root.items.item.#.name")
-	if result.Type != Array {
-		t.Errorf("Expected Array type, got %v", result.Type)
-	}
 
-	// CRITICAL: Must be limited to MaxWildcardResults
-	if len(result.Results) > MaxWildcardResults {
-		t.Errorf("SECURITY VIOLATION: Result count %d exceeds MaxWildcardResults %d",
-			len(result.Results), MaxWildcardResults)
+	// CRITICAL: Must fail rather than return a truncated result
+	if result.Exists() {
+		t.Errorf("SECURITY VIOLATION: Expected Null result, got %d results", len(result.Results))
 	}
-
-	// Should be exactly at limit
-	if len(result.Results) != MaxWildcardResults {
-		t.Errorf("Expected exactly %d results (limit), got %d", MaxWildcardResults, len(result.Results))
-	}
+	requireLimitError(t, result.Err, "MaxArrayResults")
 }
 
 // TestFieldExtractionSecurityFieldNameInjection tests field name validation
@@ -591,6 +586,8 @@ func TestFieldExtractionSecurityFieldNameInjection(t *testing.T) {
 
 // TestFieldExtractionSecurityAmplificationAttack tests small input -> large output
 func TestFieldExtractionSecurityAmplificationAttack(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Small XML that could produce large output via extraction
 	var b strings.Builder
 	b.WriteString("<root><items>")
@@ -608,15 +605,12 @@ func TestFieldExtractionSecurityAmplificationAttack(t *testing.T) {
 	// Input size: ~2MB, potential output after extraction: 2MB of values
 	result := Get(xml, "root.items.item.#.value")
 
-	if result.Type != Array {
-		t.Errorf("Expected Array type, got %v", result.Type)
-	}
-
-	// Should be limited by MaxWildcardResults
-	if len(result.Results) > MaxWildcardResults {
+	// Should fail rather than return a truncated result
+	if result.Exists() {
 		t.Errorf("SECURITY VIOLATION: Amplification attack not prevented, got %d results",
 			len(result.Results))
 	}
+	requireLimitError(t, result.Err, "MaxArrayResults")
 }
 
 // TestFieldExtractionSecurityMalformedInput tests graceful handling of malformed paths
@@ -748,6 +742,8 @@ func TestFieldExtractionSecurityNullByteInjection(t *testing.T) {
 
 // TestFieldExtractionSecurityMemoryExhaustion tests memory limit enforcement
 func TestFieldExtractionSecurityMemoryExhaustion(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Create XML that attempts to exhaust memory through field extraction
 	var b strings.Builder
 	b.WriteString("<root><items>")
@@ -769,16 +765,15 @@ func TestFieldExtractionSecurityMemoryExhaustion(t *testing.T) {
 	// Try to extract all nested fields (could be 10000 * 100 = 1M fields)
 	result := Get(xml, "root.items.item.#.data")
 
-	if result.Type == Array {
-		// Should be limited to MaxWildcardResults
-		if len(result.Results) > MaxWildcardResults {
-			t.Errorf("SECURITY VIOLATION: Memory exhaustion not prevented, got %d results",
-				len(result.Results))
-		}
+	// Should fail rather than return a truncated result
+	if result.Exists() {
+		t.Errorf("SECURITY VIOLATION: Memory exhaustion not prevented, got %d results",
+			len(result.Results))
 	}
+	requireLimitError(t, result.Err, "MaxArrayResults")
 }
 
-// TestFieldExtractionSecurityDepthLimit tests MaxFilterDepth enforcement
+// TestFieldExtractionSecurityDepthLimit tests that field extraction completes without deep recursion
 func TestFieldExtractionSecurityDepthLimit(t *testing.T) {
 	// This test requires nested field extractions which aren't directly supported
 	// But we test the depth parameter in executeFieldExtraction
@@ -899,6 +894,8 @@ func TestFieldExtractionSecurityRegexDoS(_ *testing.T) {
 
 // TestFieldExtractionSecurityIntegerOverflow tests for integer overflow in calculations
 func TestFieldExtractionSecurityIntegerOverflow(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	xml := `<root><items>`
 
 	// Create XML with many items to test counter overflow
@@ -910,16 +907,11 @@ func TestFieldExtractionSecurityIntegerOverflow(t *testing.T) {
 
 	result := Get(xml, "root.items.item.#.name")
 
-	if result.Type == Array {
-		// Verify count doesn't overflow
-		count := len(result.Results)
-		if count < 0 {
-			t.Errorf("SECURITY VIOLATION: Integer overflow detected in result count")
-		}
-		if count > MaxWildcardResults {
-			t.Errorf("SECURITY VIOLATION: Result count exceeds limit despite overflow check")
-		}
+	// Must fail with a limit error rather than overflow or truncate
+	if result.Exists() {
+		t.Errorf("SECURITY VIOLATION: Result count %d exceeds limit despite overflow check", len(result.Results))
 	}
+	requireLimitError(t, result.Err, "MaxArrayResults")
 }
 
 // ============================================================================
@@ -1082,7 +1074,7 @@ func TestOperatorParsingSecurityEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filter, err := parseFilterCondition(tt.expr)
+			filter, err := parseFilterConditionChecked(tt.expr)
 
 			if tt.shouldError {
 				if err == nil {
@@ -1130,7 +1122,7 @@ func TestOperatorParsingNoRegression(t *testing.T) {
 
 	for _, input := range maliciousInputs {
 		t.Run("reject_"+input[:min(20, len(input))], func(t *testing.T) {
-			filter, err := parseFilterCondition(input)
+			filter, err := parseFilterConditionChecked(input)
 			if err == nil && filter != nil {
 				// If it didn't error, verify it's safely handling the input
 				// The path should not contain any injected characters
@@ -1175,7 +1167,7 @@ func TestOperatorParsingDOSResistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(_ *testing.T) {
 			// Should complete quickly without hanging
-			_, err := parseFilterCondition(tt.expr)
+			_, err := parseFilterConditionChecked(tt.expr)
 			// May or may not error, but should not hang or panic
 			_ = err
 		})
@@ -1306,14 +1298,15 @@ func TestPatternMatchAttack_ExponentialBacktracking(t *testing.T) {
 
 			elapsed := time.Since(start)
 
-			// Should complete quickly (< 100ms) due to MaxPatternIterations limit
+			// Should complete quickly (< 100ms): the matcher backtracks only to the
+			// most recent '*', and MaxPatternIterations bounds the rest
 			if elapsed > 100*time.Millisecond {
 				t.Errorf("SECURITY ISSUE: Pattern matching took too long (%v) for %s", elapsed, att.desc)
 			}
 
-			// Should not match due to complexity limit exceeded
+			// These patterns do not match, and must not be reported as matches
 			if result.Exists() {
-				t.Errorf("Expected no match due to complexity limit for %s", att.desc)
+				t.Errorf("Expected no match for %s", att.desc)
 			}
 		})
 	}
@@ -1485,6 +1478,8 @@ func TestPatternMatchAttack_EscapeSequenceExploits(t *testing.T) {
 
 // TestPatternMatchAttack_MemoryExhaustion tests memory exhaustion via pattern matching
 func TestPatternMatchAttack_MemoryExhaustion(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Create large XML document
 	itemCount := 10000
 	var b strings.Builder
@@ -1533,11 +1528,11 @@ func TestPatternMatchAttack_MemoryExhaustion(t *testing.T) {
 				t.Errorf("SECURITY ISSUE: Memory exhaustion attack took too long (%v) for %s", elapsed, att.desc)
 			}
 
-			// Should not panic and results should be bounded
-			if result.Type == Array {
-				if len(result.Results) > MaxWildcardResults {
-					t.Errorf("SECURITY VIOLATION: Results exceed MaxWildcardResults for %s", att.desc)
-				}
+			// Should not panic, and must fail rather than return a truncated result
+			if result.Err != nil {
+				requireLimitError(t, result.Err, "MaxArrayResults")
+			} else if result.Type == Array && len(result.Results) > MaxArrayResults {
+				t.Errorf("SECURITY VIOLATION: Results exceed MaxArrayResults for %s", att.desc)
 			}
 		})
 	}
@@ -1570,7 +1565,7 @@ func TestPatternMatchAttack_NestedFilterDepth(t *testing.T) {
 		t.Errorf("SECURITY ISSUE: Deep nested filters took too long (%v)", elapsed)
 	}
 
-	// Should be limited by MaxFilterDepth
+	// Should complete without panicking; the result itself is not checked
 	_ = result.Type
 }
 

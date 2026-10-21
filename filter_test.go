@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -413,15 +414,13 @@ func TestFilterEdgeCases(t *testing.T) {
 // TestFilterSecurity tests security limits for filter expressions
 func TestFilterSecurity(t *testing.T) {
 	// Test maximum filter expression length
-	longExpr := "[" + strings.Repeat("a", MaxFilterExpressionLength+1) + "=1]"
-	_, err := parseFilter(longExpr)
-	if err == nil {
-		t.Error("Expected error for overly long filter expression")
-	}
+	longExpr := strings.Repeat("a", MaxFilterExpressionLength+1) + "==1"
+	result := Get(`<root><item><a>1</a></item></root>`, "root.item.#("+longExpr+")")
+	requireLimitError(t, result.Err, "MaxFilterExpressionLength")
 
 	// Test filter with reasonable length should work
 	reasonableExpr := "[age>21]"
-	_, err = parseFilter(reasonableExpr)
+	_, err := parseFilter(reasonableExpr)
 	if err != nil {
 		t.Errorf("Unexpected error for reasonable filter: %v", err)
 	}
@@ -529,11 +528,11 @@ func TestFilterErrorCases(t *testing.T) {
 	}
 }
 
-// TestFilterMaxDepth tests that deeply nested filters respect MaxFilterDepth
-func TestFilterMaxDepth(t *testing.T) {
+// TestFilterDeepDocument tests filters on deeply nested documents and with long filter paths
+func TestFilterDeepDocument(t *testing.T) {
 	// Create deeply nested XML structure
 	xml := `<root>`
-	depth := MaxFilterDepth + 5
+	depth := 15
 	for i := 0; i < depth; i++ {
 		xml += fmt.Sprintf("<level%d><value>%d</value>", i, i)
 	}
@@ -543,22 +542,20 @@ func TestFilterMaxDepth(t *testing.T) {
 	}
 	xml += `</root>`
 
-	// Create filter path that exceeds MaxFilterDepth
+	if r := Get(xml, "root.level0.#(value==0).level1.value"); r.Err != nil || r.String() != "1" {
+		t.Errorf("Expected filter on deep document to match, got %q (err %v)", r.String(), r.Err)
+	}
+
+	// A long filter path completes without a limit error
 	var filterPath string
-	for i := 0; i < MaxFilterDepth+2; i++ {
-		if i > 0 {
+	for i := 1; i < depth-1; i++ {
+		if i > 1 {
 			filterPath += "."
 		}
 		filterPath += fmt.Sprintf("level%d", i)
 	}
-	filterPath += ".value>0"
-
-	path := "root.level0.#(" + filterPath + ")"
-	result := Get(xml, path)
-
-	// Should fail gracefully due to MaxFilterDepth limit
-	if result.Exists() {
-		t.Error("Expected filter to fail due to MaxFilterDepth, but it succeeded")
+	if r := Get(xml, "root.level0.#("+filterPath+".value>0)"); r.Err != nil {
+		t.Errorf("Expected long filter path to complete without error, got %v", r.Err)
 	}
 }
 
@@ -603,7 +600,12 @@ func TestFilterOperatorValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseFilter(tt.filterExpr)
+			// Limit violations abort via panic and are converted to errors at the API boundary
+			var err error
+			func() {
+				defer recoverLimit(&err)
+				_, err = parseFilter(tt.filterExpr)
+			}()
 
 			if tt.shouldError && err == nil {
 				t.Error("Expected error, got nil")
@@ -1044,6 +1046,8 @@ func TestGJSONFilterWithModifiers(t *testing.T) {
 
 // TestGJSONFilterSecurityLimits tests that security limits are enforced
 func TestGJSONFilterSecurityLimits(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Generate XML with many items
 	var xml string
 	xml = "<items>"
@@ -1054,12 +1058,12 @@ func TestGJSONFilterSecurityLimits(t *testing.T) {
 
 	// Query that would match all items
 	result := Get(xml, "items.item.#(value>5)#")
-	results := result.Array()
 
-	// Should be limited to MaxWildcardResults (1000)
-	if len(results) > MaxWildcardResults {
-		t.Errorf("Security limit not enforced: got %d results, max is %d", len(results), MaxWildcardResults)
+	// Should fail rather than return a truncated result
+	if result.Exists() {
+		t.Errorf("Security limit not enforced: got %d results, max is %d", len(result.Array()), MaxArrayResults)
 	}
+	requireLimitError(t, result.Err, "MaxArrayResults")
 }
 
 // TestFilterPathologicalInputs tests pathological filter inputs to ensure
@@ -1149,10 +1153,16 @@ func TestFilterPathologicalInputs(t *testing.T) {
 			comment:     "Unbalanced quotes - invalid filter syntax is rejected",
 		},
 		{
-			name:        "filter_with_escaped_chars",
+			name:        "filter_with_escaped_closing_quote",
 			path:        "root.item.#(name=='Test\\')",
-			shouldExist: true, // Backslash is treated as literal character
-			comment:     "Escaped characters in filter - backslash treated as literal",
+			shouldExist: false, // The escaped quote does not close the value
+			comment:     "Escaped closing quote - unterminated value is rejected",
+		},
+		{
+			name:        "filter_with_escaped_chars",
+			path:        "root.item.#(name=='Te\\st')",
+			shouldExist: true, // \s resolves to s
+			comment:     "Escaped characters in filter values are resolved",
 		},
 		{
 			name:        "filter_recursive_structure",
@@ -2100,9 +2110,92 @@ func TestPatternMatchLongExpression(t *testing.T) {
 	longPattern := strings.Repeat("a", MaxFilterExpressionLength+1)
 	expr := `name%"` + longPattern + `"`
 
-	_, err := parseFilterCondition(expr)
+	var err error
+	func() {
+		defer recoverLimit(&err)
+		_, err = parseFilterCondition(expr)
+	}()
 
-	if err == nil {
-		t.Error("Expected error for overly long filter expression")
+	requireLimitError(t, err, "MaxFilterExpressionLength")
+}
+
+// TestFilterLoneQuoteValue is a regression test for a slice-bounds panic when a
+// filter value consists of a single quote character, e.g. #(0%").
+func TestFilterLoneQuoteValue(t *testing.T) {
+	xml := `<root><item><name>a</name></item></root>`
+
+	for _, op := range []string{"==", "!=", "<", ">", "<=", ">=", "%", "!%"} {
+		for _, quote := range []string{`"`, `'`} {
+			expr := "name" + op + quote
+			t.Run(expr, func(t *testing.T) {
+				if _, err := parseFilterCondition(expr); !errors.Is(err, ErrInvalidPath) {
+					t.Errorf("parseFilterCondition(%q) error = %v, want ErrInvalidPath", expr, err)
+				}
+				for _, path := range []string{"root.item.#(" + expr + ")", "root.item.#(" + expr + ")#", "#(" + expr + ")"} {
+					if r := Get(xml, path); r.Exists() {
+						t.Errorf("Get(%q) = %v, want Null", path, r)
+					}
+					if r := GetWithOptions(xml, path, &Options{CaseSensitive: false}); r.Exists() {
+						t.Errorf("GetWithOptions(%q) = %v, want Null", path, r)
+					}
+					_, _ = Set(xml, path, "x")
+				}
+			})
+		}
+	}
+
+	// Quoted values, including an empty quoted string, still parse
+	for expr, want := range map[string]string{`name=="a"`: "a", `name=='a'`: "a", `name==""`: ""} {
+		filter, err := parseFilterCondition(expr)
+		if err != nil || filter.Value != want {
+			t.Errorf("parseFilterCondition(%q) = %+v, %v; want value %q", expr, filter, err, want)
+		}
+	}
+}
+
+// TestFilterPathsWithDots is a regression test for filters containing dots, which
+// used to be split as path separators: nested filter paths, decimal values and
+// quoted values never matched.
+func TestFilterPathsWithDots(t *testing.T) {
+	xml := `<root>
+		<item id="1"><name>a.b</name><price>19.99</price><c><d>x</d></c><a.b>1</a.b></item>
+		<item id="2"><name>a*b</name><price>5</price><c><d>y</d></c></item>
+		<item id="3"><name>It's</name><price>7.5</price><c><d>x</d></c></item>
+		<item id="4"><name>axb</name><price>3</price><c><d>z</d></c></item>
+		<item id="5"><name>x).y</name><price>1</price></item>
+	</root>`
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{`root.item.#(c.d==y).@id`, "2"},
+		{`root.item.#(c.d==x)#.@id`, `["1","3"]`},
+		{`root.item.#(price==19.99).@id`, "1"},
+		{`root.item.#(price>7.4)#.@id`, `["1","3"]`},
+		{`root.item.#(name=="a.b").@id`, "1"},
+		{`root.item.#(name=="x).y").@id`, "5"},
+		{`root.item.#(a\.b==1).@id`, "1"},
+		{`root.item.#(name=='It\'s').@id`, "3"},
+		{`root.item.#(name%"a\*b")#.@id`, "2"},
+		{`root.item.#(name%"a*b")#.@id`, `["1","2","4"]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if r := Get(xml, tt.path); r.Err != nil || r.String() != tt.want {
+				t.Errorf("Get = %q (err %v), want %q", r.String(), r.Err, tt.want)
+			}
+			if r := GetWithOptions(xml, tt.path, &Options{CaseSensitive: false}); r.Err != nil || r.String() != tt.want {
+				t.Errorf("GetWithOptions = %q (err %v), want %q", r.String(), r.Err, tt.want)
+			}
+		})
+	}
+
+	// Unterminated quoted values are rejected
+	for _, path := range []string{`root.item.#(name=="a.b)`, `root.item.#(name=='It\')`} {
+		if r := Get(xml, path); r.Exists() {
+			t.Errorf("Get(%q) = %v, want Null", path, r)
+		}
 	}
 }

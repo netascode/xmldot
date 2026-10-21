@@ -4,36 +4,8 @@
 package xmldot
 
 import (
+	"bytes"
 	"strings"
-)
-
-// Security limits to protect against malicious XML
-const (
-	// MaxNestingDepth is the maximum allowed nesting depth for XML elements.
-	// This prevents stack overflow attacks with deeply nested structures.
-	MaxNestingDepth = 100
-
-	// MaxDocumentSize is the maximum allowed size for an XML document in bytes.
-	// This prevents memory exhaustion attacks with extremely large documents.
-	// Set to 10MB by default.
-	MaxDocumentSize = 10 * 1024 * 1024
-
-	// MaxValueSize is the maximum allowed size for a single value in Set operations.
-	// This prevents DoS attacks via memory exhaustion with extremely large values.
-	// Set to 5MB by default.
-	MaxValueSize = 5 * 1024 * 1024
-
-	// MaxAttributes is the maximum number of attributes allowed per element.
-	// This prevents DoS attacks with attribute flooding.
-	MaxAttributes = 100
-
-	// MaxTokenSize is the maximum size for any single token (element name, attribute value, etc).
-	// This prevents buffer overrun attacks with extremely large tokens.
-	MaxTokenSize = 1024 * 1024 // 1MB
-
-	// MaxNamespacePrefixLength is the maximum allowed length for namespace prefixes.
-	// This prevents memory exhaustion attacks with excessively long namespace prefixes.
-	MaxNamespacePrefixLength = 256
 )
 
 // xmlParser is an incremental XML parser that parses only what's needed.
@@ -65,11 +37,9 @@ const (
 //	    wg.Wait()
 //	}
 type xmlParser struct {
-	data        []byte
-	pos         int
-	depth       int
-	filterDepth int
-	dataLen     int // Cache data length to avoid repeated len() calls
+	data    []byte
+	pos     int
+	dataLen int // Cache data length to avoid repeated len() calls
 }
 
 // newXMLParser creates a new XML parser
@@ -77,7 +47,6 @@ func newXMLParser(data []byte) *xmlParser {
 	return &xmlParser{
 		data:    data,
 		pos:     0,
-		depth:   0,
 		dataLen: len(data), // Cache length for performance
 	}
 }
@@ -118,15 +87,14 @@ func (p *xmlParser) next() byte {
 
 // readUntil reads until the specified byte is found
 // Security: Limits token size to prevent buffer overrun attacks
-// Returns empty string if token exceeds MaxTokenSize to signal error condition
+// Aborts the query with a *LimitError if the token exceeds MaxTokenSize
 // Optimized: Use cached dataLen
 func (p *xmlParser) readUntil(delim byte) string {
 	start := p.pos
 	for p.pos < p.dataLen {
 		// Security check: enforce maximum token size
 		if p.pos-start > MaxTokenSize {
-			// Token too large - return empty string to signal error
-			return ""
+			exceedLimit("MaxTokenSize", p.pos-start, MaxTokenSize)
 		}
 		if p.data[p.pos] == delim {
 			result := string(p.data[start:p.pos])
@@ -139,7 +107,7 @@ func (p *xmlParser) readUntil(delim byte) string {
 
 // readUntilAny reads until any of the specified bytes is found
 // Security: Limits token size to prevent buffer overrun attacks
-// Returns empty string if token exceeds MaxTokenSize to signal error condition
+// Aborts the query with a *LimitError if the token exceeds MaxTokenSize
 // Optimized: Use cached dataLen
 func (p *xmlParser) readUntilAny(delims string) string {
 	start := p.pos
@@ -147,8 +115,7 @@ func (p *xmlParser) readUntilAny(delims string) string {
 	for p.pos < p.dataLen {
 		// Security check: enforce maximum token size
 		if p.pos-start > MaxTokenSize {
-			// Token too large - return empty string to signal error
-			return ""
+			exceedLimit("MaxTokenSize", p.pos-start, MaxTokenSize)
 		}
 		c := p.data[p.pos]
 		for i := 0; i < delimsLen; i++ {
@@ -172,11 +139,6 @@ func (p *xmlParser) parseAttributes() map[string]string {
 	for {
 		p.skipWhitespace()
 
-		// Security check: enforce maximum attribute count to prevent DoS attacks
-		if attrCount >= MaxAttributes {
-			break
-		}
-
 		// Check if we've reached the end of the tag
 		if p.pos >= p.dataLen {
 			break
@@ -193,6 +155,11 @@ func (p *xmlParser) parseAttributes() map[string]string {
 			break
 		}
 		attrCount++
+
+		// Security check: enforce maximum attribute count to prevent DoS attacks
+		if attrCount > MaxAttributes {
+			exceedLimit("MaxAttributes", attrCount, MaxAttributes)
+		}
 
 		p.skipWhitespace()
 
@@ -248,19 +215,15 @@ func (p *xmlParser) parseElementName() (string, map[string]string, bool) {
 
 // parseElementContent extracts the content between opening and closing tags
 // Returns the text content, handling nested elements and escaping
+// Security: Content nested more than MaxNestingDepth levels below elementName (counting
+// elementName itself) aborts the query with a *LimitError. Queries scan documents from
+// the root, so this enforces the same absolute depth limit as validation.
 func (p *xmlParser) parseElementContent(elementName string) string {
-	// Track nesting depth to prevent stack overflow attacks
-	p.depth++
-	if p.depth > MaxNestingDepth {
-		// Exceeded maximum nesting depth - stop parsing and return empty
-		p.depth--
-		return ""
-	}
-	defer func() { p.depth-- }()
-
 	var content strings.Builder
 	// Track element-specific depth for matching tags
 	elementDepth := 1
+	// Track overall nesting depth below and including elementName
+	nesting := 1
 
 	for p.pos < p.dataLen && elementDepth > 0 {
 		c := p.peek()
@@ -276,6 +239,7 @@ func (p *xmlParser) parseElementContent(elementName string) string {
 					p.next() // skip '/'
 					closeName := p.readUntil('>')
 					p.next() // skip '>'
+					nesting--
 
 					// Extract just the element name (before any whitespace)
 					closeName = strings.TrimSpace(closeName)
@@ -293,9 +257,15 @@ func (p *xmlParser) parseElementContent(elementName string) string {
 					content.WriteString(closeName)
 					content.WriteString(">")
 				} else if next == '!' {
-					// Comment or CDATA - include in content for now
-					content.WriteByte(c)
-					p.next()
+					// Comments and CDATA sections are copied verbatim, so that
+					// markup inside them is not parsed as elements
+					if end := p.skipCommentOrCDATA(); end > p.pos {
+						content.Write(p.data[p.pos:end])
+						p.pos = end
+					} else {
+						content.WriteByte(c)
+						p.next()
+					}
 				} else {
 					// Opening tag of nested element
 					p.next() // skip '<'
@@ -325,6 +295,13 @@ func (p *xmlParser) parseElementContent(elementName string) string {
 					if p.peek() == '>' {
 						p.next()
 						content.WriteString(">")
+					}
+
+					if !isSelfClosing {
+						nesting++
+						if nesting > MaxNestingDepth {
+							exceedLimit("MaxNestingDepth", nesting, MaxNestingDepth)
+						}
 					}
 
 					// Only increment elementDepth if this is the same element type we're tracking
@@ -452,11 +429,16 @@ func (p *xmlParser) skipToNextElement() bool {
 						}
 					}
 				} else if next == '?' {
-					// Skip processing instruction
+					// Skip processing instruction. Like the validator, count
+					// MaxTokenSize from after "<?".
+					p.next() // skip '<'
+					p.next() // skip '?'
 					p.readUntil('>')
 					p.next()
 				} else {
-					// Skip closing tag
+					// Skip closing tag, counting MaxTokenSize from after "</"
+					p.next() // skip '<'
+					p.next() // skip '/'
 					p.readUntil('>')
 					p.next()
 				}
@@ -501,4 +483,24 @@ func escapeXML(s string) string {
 // for better performance than multiple ReplaceAll calls
 func unescapeXML(s string) string {
 	return xmlUnescaper.Replace(s)
+}
+
+// skipCommentOrCDATA returns the position just after the comment or CDATA section
+// starting at p.pos, the end of the data if it is unterminated, or p.pos if no
+// comment or CDATA section starts there.
+func (p *xmlParser) skipCommentOrCDATA() int {
+	var start, end string
+	switch rest := p.data[p.pos:]; {
+	case bytes.HasPrefix(rest, []byte("<!--")):
+		start, end = "<!--", "-->"
+	case bytes.HasPrefix(rest, []byte("<![CDATA[")):
+		start, end = "<![CDATA[", "]]>"
+	default:
+		return p.pos
+	}
+	from := p.pos + len(start)
+	if idx := bytes.Index(p.data[from:], []byte(end)); idx >= 0 {
+		return from + idx + len(end)
+	}
+	return p.dataLen
 }

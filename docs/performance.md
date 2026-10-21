@@ -524,12 +524,12 @@ go test -bench=BenchmarkMyWorkload -benchmem -benchtime=5s
 XMLDOT has security limits for document processing:
 
 ```go
-const MaxDocumentSize = 10 * 1024 * 1024  // 10MB default
+xmldot.MaxDocumentSize // 100 MB default, adjustable at initialization
 
 // Documents exceeding this limit are rejected
-largeXML := generateXML(20 * 1024 * 1024)  // 20MB
+largeXML := generateXML(200 * 1024 * 1024)  // 200MB
 result := xmldot.Get(largeXML, path)
-// Returns: Null (exceeds MaxDocumentSize)
+// Returns: Null with result.Err set to a *LimitError for MaxDocumentSize
 ```
 
 ### Performance by Document Size
@@ -606,7 +606,7 @@ result := xmldot.Get(largeXML, "root.target")
 
 ### Streaming Alternatives
 
-For documents >10MB or streaming scenarios:
+For documents larger than MaxDocumentSize or streaming scenarios:
 
 ```go
 // Streaming support is planned for a future release
@@ -628,7 +628,7 @@ for {
 
 1. **Validate size before processing:**
 ```go
-if len(xmlData) > 10*1024*1024 {
+if len(xmlData) > xmldot.MaxDocumentSize {
     return errors.New("document too large")
 }
 ```
@@ -726,7 +726,7 @@ newXML := string(newBytes)
 ✓ Strong type safety required
 ✓ Complex struct unmarshaling
 ✓ Full XML Namespaces support needed
-✓ Streaming large files (>10MB)
+✓ Streaming large files (larger than MaxDocumentSize)
 ✓ Standards-compliant XML processing
 ✓ Schema validation required
 ```
@@ -935,7 +935,7 @@ go test -bench=BenchmarkConcurrent -benchmem -cpu=1,2,4,8
 - [ ] Validate once, then use optimistic mode
 
 **Large Documents:**
-- [ ] Check document size before processing (<10MB default limit)
+- [ ] Check document size before processing (MaxDocumentSize, 100MB default)
 - [ ] Use specific paths to avoid scanning entire document
 - [ ] Consider splitting large documents into sections
 - [ ] Profile memory usage for documents >1MB
@@ -997,8 +997,8 @@ for _, data := range byteSlices {
 
 **5. Ignoring Security Limits**
 ```go
-// May fail silently on large documents
-result := xmldot.Get(hugeXML, path)  // >10MB rejected
+// Returns Null with result.Err set when a limit is exceeded
+result := xmldot.Get(hugeXML, path)  // >MaxDocumentSize rejected
 
 // Better: Check size first
 if len(hugeXML) > xmldot.MaxDocumentSize {

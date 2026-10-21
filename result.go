@@ -45,6 +45,9 @@ type Result struct {
 	Num float64
 	// Results holds child results for Array type (Phase 3+)
 	Results []Result
+	// Err is set when the query could not be completed, for example because a
+	// security limit was exceeded (see LimitError). The Result is then Null.
+	Err error `json:"-"`
 }
 
 // Exists returns true if the result represents an existing value in the XML.
@@ -234,7 +237,7 @@ func itoa(i int) string {
 //   - Field extraction with no matches (#.field): Returns empty Array (Type: Array, Results: [])
 //   - Filter with no matches: Returns Null for #(...), empty Array for #(...)#
 //
-// Security: All security limits apply (MaxDocumentSize, MaxWildcardResults, etc.).
+// Security: All security limits apply (MaxDocumentSize, MaxArrayResults, etc.).
 // The Raw field is already bounded by package-level parsing limits. Deep chaining
 // operates on progressively smaller XML subsets, preventing amplification attacks.
 //
@@ -268,9 +271,9 @@ func itoa(i int) string {
 // Recommendation: Use fluent chaining for readability when overhead is acceptable,
 // use full paths (e.g., "root.user.name") for performance-critical loops.
 func (r Result) Get(path string) Result {
-	// Null results return Null immediately
+	// Null results return Null immediately, preserving any error
 	if r.Type == Null {
-		return Result{Type: Null}
+		return Result{Type: Null, Err: r.Err}
 	}
 
 	// Primitive types (String, Number, Attribute, True, False) cannot be queried
@@ -323,8 +326,11 @@ func (r Result) Get(path string) Result {
 func (r Result) GetMany(paths ...string) []Result {
 	results := make([]Result, len(paths))
 
-	// Null or primitive types: return slice of Null results (zero-values)
+	// Null or primitive types: return slice of Null results, preserving any error
 	if r.Type == Null || (r.Type != Element && r.Type != Array) {
+		for i := range results {
+			results[i].Err = r.Err
+		}
 		return results
 	}
 
@@ -362,9 +368,9 @@ func (r Result) GetMany(paths ...string) []Result {
 //
 // Concurrency: GetWithOptions is safe for concurrent use.
 func (r Result) GetWithOptions(path string, opts *Options) Result {
-	// Null results return Null immediately
+	// Null results return Null immediately, preserving any error
 	if r.Type == Null {
-		return Result{Type: Null}
+		return Result{Type: Null, Err: r.Err}
 	}
 
 	// Primitive types cannot be queried
@@ -433,10 +439,10 @@ func (r Result) GetWithOptions(path string, opts *Options) Result {
 //   - Only immediate children (not recursive)
 //
 // Security:
-//   - Immediate children limited to MaxWildcardResults (1000)
-//   - Elements beyond limit are silently excluded (map will be incomplete)
-//   - Consider using explicit Get queries for elements with >1000 children
-//   - Nesting depth checked during parse (MaxNestingDepth=100)
+//   - Immediate children limited to MaxArrayResults
+//   - If any security limit is exceeded, or the Result itself failed (Err is set),
+//     Map returns nil (never an incomplete map). An element without children
+//     returns an empty, non-nil map.
 //
 // Example:
 //
@@ -473,6 +479,11 @@ func (r Result) GetWithOptions(path string, opts *Options) Result {
 //
 // Concurrency: Safe for concurrent use. Result is immutable.
 func (r Result) Map() map[string]Result {
+	// Failed query: return nil, never an empty map that looks like "no children"
+	if r.Err != nil {
+		return nil
+	}
+
 	// Null or primitive types: return empty map
 	if r.Type == Null || (r.Type != Element && r.Type != Array) {
 		return make(map[string]Result)
@@ -515,6 +526,11 @@ func (r Result) Map() map[string]Result {
 //
 // Concurrency: MapWithOptions is safe for concurrent use.
 func (r Result) MapWithOptions(opts *Options) map[string]Result {
+	// Failed query: return nil, never an empty map that looks like "no children"
+	if r.Err != nil {
+		return nil
+	}
+
 	// Fast path: if opts uses all defaults, use standard Map
 	if isDefaultOptions(opts) {
 		return r.Map()
@@ -540,16 +556,17 @@ func (r Result) MapWithOptions(opts *Options) map[string]Result {
 // parseMapChildren parses element content and returns immediate children as map.
 // Note: xml parameter is the element's content (Result.Raw), not the full element with tags.
 // This means parent element attributes are NOT accessible - only child elements and mixed text.
-func parseMapChildren(xml string) map[string]Result {
+func parseMapChildren(xml string) (result map[string]Result) {
+	defer recoverMapLimit(&result)
 	// Convert to bytes (zero-copy)
 	xmlBytes := stringToBytes(xml)
 
 	// Security check
-	if len(xmlBytes) > MaxDocumentSize {
-		return make(map[string]Result)
+	if checkDocumentSize(len(xmlBytes)) != nil {
+		return nil
 	}
 
-	result := make(map[string]Result, 8) // Pre-allocate reasonable capacity
+	result = make(map[string]Result, 8) // Pre-allocate reasonable capacity
 
 	// If empty content, return empty map
 	if len(xmlBytes) == 0 {
@@ -572,12 +589,6 @@ func parseMapChildren(xml string) map[string]Result {
 	childCount := 0
 
 	for parser.skipToNextElement() {
-		// Security limit: Prevent memory exhaustion from elements with excessive children
-		// Silently truncate at MaxWildcardResults (1000) - map will be incomplete beyond limit
-		if childCount >= MaxWildcardResults {
-			break
-		}
-
 		parser.next() // skip '<'
 		childName, _, childIsSelfClosing := parser.parseElementName()
 
@@ -597,6 +608,7 @@ func parseMapChildren(xml string) map[string]Result {
 		}
 
 		// Add child to map, handling duplicates by converting to Array
+		checkArrayResults(childCount)
 		addChildToMap(result, childName, newChild)
 		childCount++
 	}
@@ -606,16 +618,17 @@ func parseMapChildren(xml string) map[string]Result {
 
 // parseMapChildrenWithOptions parses element content with options and returns immediate children as map.
 // Supports case-insensitive element name matching when opts.CaseSensitive = false.
-func parseMapChildrenWithOptions(xml string, opts *Options) map[string]Result {
+func parseMapChildrenWithOptions(xml string, opts *Options) (result map[string]Result) {
+	defer recoverMapLimit(&result)
 	// Convert to bytes (zero-copy)
 	xmlBytes := stringToBytes(xml)
 
 	// Security check
-	if len(xmlBytes) > MaxDocumentSize {
-		return make(map[string]Result)
+	if checkDocumentSize(len(xmlBytes)) != nil {
+		return nil
 	}
 
-	result := make(map[string]Result, 8) // Pre-allocate reasonable capacity
+	result = make(map[string]Result, 8) // Pre-allocate reasonable capacity
 
 	// If empty content, return empty map
 	if len(xmlBytes) == 0 {
@@ -641,12 +654,6 @@ func parseMapChildrenWithOptions(xml string, opts *Options) map[string]Result {
 	childCount := 0
 
 	for parser.skipToNextElement() {
-		// Security limit: Prevent memory exhaustion from elements with excessive children
-		// Silently truncate at MaxWildcardResults (1000) - map will be incomplete beyond limit
-		if childCount >= MaxWildcardResults {
-			break
-		}
-
 		parser.next() // skip '<'
 		childName, _, childIsSelfClosing := parser.parseElementName()
 
@@ -672,6 +679,7 @@ func parseMapChildrenWithOptions(xml string, opts *Options) map[string]Result {
 		}
 
 		// Add child to map, handling duplicates by converting to Array
+		checkArrayResults(childCount)
 		addChildToMap(result, mapKey, newChild)
 		childCount++
 	}

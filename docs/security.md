@@ -22,7 +22,7 @@ XMLDOT is designed with a **secure-by-default** philosophy, implementing multipl
 
 - **Secure by default**: All security protections enabled automatically
 - **Defense in depth**: Multiple overlapping protections
-- **Fail-safe behavior**: Graceful degradation, not crashes
+- **Fail loudly**: Exceeding a limit returns an error, never a partial result
 - **No external entities**: XXE protection built-in
 - **Resource limits**: Protection against DoS attacks
 
@@ -126,128 +126,85 @@ result := xmldot.Get(billionLaughs, "root")
 - Constant memory usage regardless of entity depth
 - Protection is always active
 
-### 3. Document Size Limits
+### 3. Failing on Limit Violations
 
-**Threat**: Extremely large documents can exhaust memory.
+Every security limit fails the operation instead of returning a partial result.
+A query that exceeds a limit never looks like "element not found":
 
-**Protection**:
+- `Get` and related functions return a Null `Result` whose `Err` field holds a `*LimitError`
+- `Set`, `Delete` and related functions return the `*LimitError` and the original document
+- `Result.Map` returns `nil` (an element without children returns an empty, non-nil map)
+- `ValidateWithError` returns a `*ValidateError` that wraps the `*LimitError`
+
 ```go
-const MaxDocumentSize = 10 * 1024 * 1024  // 10MB default
-
-// Large document rejected
-largeXML := make([]byte, 20*1024*1024)  // 20MB
-result := xmldot.Get(string(largeXML), "root.element")
-fmt.Println(result.Exists())  // false (document too large)
-
-// Memory exhaustion prevented
-// Predictable memory usage
-```
-
-**Safe Usage**:
-```go
-// Check size before processing
-xmlData := loadFromNetwork()
-
-if len(xmlData) > xmldot.MaxDocumentSize {
-    return errors.New("document exceeds size limit")
-}
-
-// Safe to process
-result := xmldot.Get(string(xmlData), path)
-```
-
-### 4. Nesting Depth Limits
-
-**Threat**: Deeply nested XML can cause stack overflow.
-
-**Protection**:
-```go
-const MaxNestingDepth = 100  // 100 levels default
-
-// Attack: Deeply nested XML
-nested := "<root>"
-for i := 0; i < 200; i++ {
-    nested += "<level" + strconv.Itoa(i) + ">"
-}
-nested += "value"
-for i := 199; i >= 0; i-- {
-    nested += "</level" + strconv.Itoa(i) + ">"
-}
-nested += "</root>"
-
-// xmldot protection: Parsing stops at depth 100
-// Deeper elements ignored (fail-safe truncation)
-// No stack overflow
-// Predictable behavior
-```
-
-**Technical Details**:
-- Parser tracks nesting depth
-- Elements beyond MaxNestingDepth are skipped
-- Fail-safe behavior: truncation, not error
-- Stack overflow prevented
-
-### 5. Attribute Flood Protection
-
-**Threat**: Elements with thousands of attributes can exhaust memory during parsing.
-
-**Protection**:
-```go
-const MaxAttributes = 100  // 100 attributes per element
-
-// Attack: Attribute flooding
-attack := "<element"
-for i := 0; i < 1000; i++ {
-    attack += fmt.Sprintf(" attr%d=\"value%d\"", i, i)
-}
-attack += ">content</element>"
-
-// xmldot protection: Only first 100 attributes parsed
-// Excess attributes silently ignored (fail-safe)
-// Memory usage bounded
-// Attack mitigated
-```
-
-**Example**:
-```go
-// Element with 200 attributes (attack)
-xml := `<item ` + generateAttributes(200) + `>value</item>`
-
-// Only first 100 attributes accessible
-for i := 0; i < 150; i++ {
-    attrPath := fmt.Sprintf("item.@attr%d", i)
-    result := xmldot.Get(xml, attrPath)
-    if i < 100 {
-        fmt.Println(result.Exists())  // true
-    } else {
-        fmt.Println(result.Exists())  // false (excess ignored)
+result := xmldot.Get(xml, "root.items.item.#")
+if result.Err != nil {
+    var limitErr *xmldot.LimitError
+    if errors.As(result.Err, &limitErr) {
+        log.Printf("limit %s exceeded: %d > %d", limitErr.Limit, limitErr.Value, limitErr.Max)
     }
+    return result.Err
 }
 ```
 
-### 6. Token Size Limits
+Use `errors.Is(err, xmldot.ErrLimitExceeded)` to detect any limit violation. A Null
+result derived from a failed result (for example via `Result.Get`) carries the same `Err`.
 
-**Threat**: Extremely large element names or attribute values can cause buffer overflows.
+### 4. Document and Value Size Limits
+
+**Threat**: Extremely large documents or values can exhaust memory.
 
 **Protection**:
 ```go
-const MaxTokenSize = 1024 * 1024  // 1MB per token
+xmldot.MaxDocumentSize // 100 MB default
+xmldot.MaxValueSize    // 100 MB default (single value in Set operations)
 
-// Attack: Huge element name
-hugeName := strings.Repeat("a", 2*1024*1024)  // 2MB name
-attack := "<" + hugeName + ">value</" + hugeName + ">"
+result := xmldot.Get(hugeXML, "root.element")
+// result.Exists() == false, result.Err is a *LimitError for MaxDocumentSize
 
-// xmldot protection: Token truncated at 1MB
-// Parser continues safely (fail-safe)
-// No buffer overflow
-// Memory bounded
+_, err := xmldot.Set(xml, "root.element", hugeValue)
+// err is a *LimitError for MaxValueSize, or MaxDocumentSize if the result grows too large
 ```
 
 **Technical Details**:
-- Element names, attribute names, attribute values limited
-- Tokens exceeding MaxTokenSize are truncated
-- Fail-safe behavior: truncation or empty result
-- Buffer overflow prevented
+- xmldot parses the input in place, so the cost of a query is linear in the document size
+- The limit bounds the memory used for intermediate copies, not the input itself; enforce
+  a size limit while reading untrusted input (see Safe Usage Patterns)
+
+### 5. Nesting Depth Limits
+
+**Threat**: Deeply nested XML can exhaust the stack in recursive processing.
+
+**Protection**:
+```go
+xmldot.MaxNestingDepth // 100 levels default
+
+result := xmldot.Get(deeplyNestedXML, "root.item")
+// Any query that scans the over-deep part of the document fails:
+// result.Err is a *LimitError for MaxNestingDepth
+
+err := xmldot.ValidateWithError(deeplyNestedXML)
+// errors.Is(err, xmldot.ErrLimitExceeded) == true
+
+_, err2 := xmldot.Set(deeplyNestedXML, "root.item", "v")
+// err2 is a *LimitError for MaxNestingDepth
+```
+
+Get, Set and validation apply the same absolute depth, counting the root element.
+
+### 6. Attribute and Token Limits
+
+**Threat**: Elements with huge numbers of attributes, or huge names and attribute
+values, can exhaust memory during parsing.
+
+**Protection**:
+```go
+xmldot.MaxAttributes // 1000 attributes per element
+xmldot.MaxTokenSize  // 1 MB per element name, attribute name or attribute value
+
+result := xmldot.Get(attributeFlood, "item.@attr0")
+// result.Err is a *LimitError for MaxAttributes
+```
 
 ### 7. Control Character Rejection
 
@@ -287,108 +244,78 @@ result := xmldot.Get(xml, maliciousFilter)
 // No log injection occurs
 ```
 
-### 8. Filter Depth Limits
+### 8. Filter Limits
 
-**Threat**: Deeply nested filter expressions can cause stack overflow.
-
-**Protection**:
-```go
-const MaxFilterDepth = 10  // 10 levels of nested filters
-
-// Attack: Deeply nested filter
-deepFilter := "root.#(a.#(b.#(c.#(d.#(e.#(f.#(g.#(h.#(i.#(j.#(k>10)))))))))))"
-result := xmldot.Get(xml, deepFilter)
-// Returns Null (exceeds MaxFilterDepth)
-// No stack overflow
-// Attack prevented
-```
-
-**Safe Usage**:
-```go
-// Simple filter (safe)
-result := xmldot.Get(xml, "items.item.#(price>100)")  // Depth 1
-
-// Multiple filters (safe)
-result := xmldot.Get(xml, "items.item.#(price>100).#(@active==true)")  // Depth 1
-
-// Nested element filter (moderate depth)
-result := xmldot.Get(xml, "items.item.#(category.type==electronics)")  // Depth 2
-```
-
-### 9. Wildcard Result Limits
-
-**Threat**: Recursive wildcards on large documents can consume excessive memory.
+**Threat**: Long filter expressions and pathological patterns can cause excessive
+CPU usage.
 
 **Protection**:
 ```go
-const MaxWildcardResults = 1000  // 1000 results maximum
+xmldot.MaxFilterExpressionLength // 4096 bytes per filter expression
+xmldot.MaxPatternIterations      // 10,000,000 steps per % or !% match, plus one per value byte
 
-// Attack: Recursive wildcard on huge document with 10,000 matches
-largeXML := generateXMLWithManyElements(10000)
-result := xmldot.Get(largeXML, "root.**.item")
-
-// xmldot protection: Only first 1000 matches returned
-matches := result.Array()
-fmt.Println(len(matches))  // Maximum 1000
-// Memory usage bounded
-// DoS prevented
+result := xmldot.Get(xml, `items.item.#(name%"*`+strings.Repeat("a", 50)+`b")#`)
+// Pathological patterns take up to O(len(value) * len(pattern)) steps; if a single
+// match exceeds its budget, result.Err is a *LimitError instead of a guessed answer
 ```
 
-**Safe Usage**:
-```go
-// Use specific paths when possible (no limit)
-result := xmldot.Get(xml, "root.catalog.items.item")  // No wildcard
+**Technical Details**:
+- Pattern matching uses a linear-space glob matcher that backtracks only to the most
+  recent `*`, so it never needs memory proportional to `len(value) * len(pattern)`
+- Typical patterns match in linear time and always complete, because the budget
+  includes one step per byte of the value; a trailing `*` ends matching immediately
 
-// Limit wildcard scope
-result := xmldot.Get(xml, "root.catalog.*.item")  // Single-level (faster)
-```
+### 9. Array and Wildcard Result Limits
 
-### 10. Path Segment Limits
-
-**Threat**: Extremely long paths can exhaust memory during parsing.
+**Threat**: Queries that collect many elements can consume excessive memory.
 
 **Protection**:
 ```go
-const MaxPathSegments = 100  // 100 segments maximum
+xmldot.MaxArrayResults    // 100,000 siblings for #, .N, #.field, filters, *, Map()
+xmldot.MaxWildcardResults // 100,000 results for recursive ** queries
 
-// Attack: Extremely long path
-longPath := "root" + strings.Repeat(".child", 150)  // 150 segments
+result := xmldot.Get(xml, "root.item.#")
+// Counts every <item>; with more than MaxArrayResults items,
+// result.Err is a *LimitError instead of a truncated count
+```
+
+### 10. Path Limits
+
+**Threat**: Extremely long or complex paths can exhaust memory during parsing.
+
+**Protection**:
+```go
+xmldot.MaxPathSegments          // 100 segments
+xmldot.MaxFieldNameLength       // 256 bytes for #.field names
+xmldot.MaxNamespacePrefixLength // 256 bytes for namespace prefixes
+xmldot.MaxModifierChainDepth    // 20 chained modifiers
+
+longPath := "root" + strings.Repeat(".child", 150)
 result := xmldot.Get(xml, longPath)
-// Returns Null (exceeds MaxPathSegments)
-// Memory bounded
+// result.Err is a *LimitError for MaxPathSegments
 ```
 
 ### 11. Recursive Operation Limits
 
-**Threat**: Recursive wildcard queries can cause CPU exhaustion.
+**Threat**: Chained recursive wildcard queries can cause CPU exhaustion.
 
 **Protection**:
 ```go
-const MaxRecursiveOperations = 10000  // 10,000 operations max
+xmldot.MaxRecursiveOperations // 10,000 minimum budget
 
-// Attack: Recursive wildcard on deeply nested document
-deepXML := generateDeeplyNestedXML(1000)  // 1000 levels
-result := xmldot.Get(deepXML, "root.**.item")
-
-// xmldot protection: Search stops after 10,000 operations
-// CPU usage bounded
-// DoS prevented
+result := xmldot.Get(xml, "root.**.item.**.name")
+// All "**" segments of one query share a budget that is the larger of
+// MaxRecursiveOperations and the document size in bytes. A single recursive
+// search over any document completes; chained searches that would revisit the
+// document many times exceed the budget and set result.Err to a *LimitError
 ```
 
-### 12. Set Operation Value Limits
+### 12. Set Operation Limits
 
-**Threat**: Setting extremely large values can cause memory exhaustion.
-
-**Protection**:
-```go
-const MaxValueSize = 5 * 1024 * 1024  // 5MB maximum value
-
-// Attack: Set huge value
-hugeValue := strings.Repeat("x", 10*1024*1024)  // 10MB
-newXML, err := xmldot.Set(xml, "root.element", hugeValue)
-// Returns error: value too large
-// Memory exhaustion prevented
-```
+Set and Delete check the input document, the value and the resulting document against
+`MaxDocumentSize` and `MaxValueSize`, and return a `*LimitError` together with the
+unchanged input when a limit is exceeded. Validation failures caused by a limit are
+reported as the `*LimitError`, not as `ErrMalformedXML`.
 
 ### 13. XML Injection Prevention (Set Operations)
 
@@ -423,65 +350,41 @@ fmt.Println(newXML)
 
 ## Security Limits Reference
 
-Complete reference of all security limits with rationale:
+All limits are package variables. Exceeding any of them fails the operation with a
+`*LimitError` (see [Failing on Limit Violations](#3-failing-on-limit-violations)).
 
-| Constant | Default Value | Purpose | Rationale |
-|----------|---------------|---------|-----------|
-| **MaxDocumentSize** | 10 MB | Maximum XML document size | Prevents memory exhaustion from huge documents |
-| **MaxValueSize** | 5 MB | Maximum value in Set operations | Prevents memory exhaustion via large values |
-| **MaxNestingDepth** | 100 levels | Maximum element nesting | Prevents stack overflow from deeply nested XML |
-| **MaxAttributes** | 100 per element | Maximum attributes per element | Prevents memory exhaustion from attribute flooding |
-| **MaxTokenSize** | 1 MB | Maximum token size (name, value) | Prevents buffer overflow from huge tokens |
-| **MaxNamespacePrefixLength** | 256 bytes | Maximum namespace prefix length | Prevents memory exhaustion from long prefixes |
-| **MaxFilterDepth** | 10 levels | Maximum filter nesting depth | Prevents stack overflow from nested filters |
-| **MaxFilterExpressionLength** | 256 bytes | Maximum filter expression length | Prevents parsing overhead from long filters |
-| **MaxWildcardResults** | 1000 results | Maximum wildcard match results | Prevents memory exhaustion from many matches |
-| **MaxRecursiveOperations** | 10,000 ops | Maximum recursive search operations | Prevents CPU exhaustion from complex wildcards |
-| **MaxPathSegments** | 100 segments | Maximum path length | Prevents memory exhaustion from long paths |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| **MaxDocumentSize** | 100 MB | Maximum XML document size |
+| **MaxValueSize** | 100 MB | Maximum value in Set operations |
+| **MaxNestingDepth** | 100 levels | Maximum element nesting |
+| **MaxAttributes** | 1000 per element | Maximum attributes per element |
+| **MaxTokenSize** | 1 MB | Maximum element name, attribute name or attribute value |
+| **MaxNamespacePrefixLength** | 256 bytes | Maximum namespace prefix length in paths (longer prefixes in documents are treated as unprefixed) |
+| **MaxArrayResults** | 100,000 | Maximum siblings collected by #, .N, #.field, filters, * and Map() |
+| **MaxWildcardResults** | 100,000 | Maximum results from recursive ** queries |
+| **MaxRecursiveOperations** | 10,000 | Minimum operation budget shared by the ** segments of a query (scales with document size) |
+| **MaxFilterExpressionLength** | 4096 bytes | Maximum filter expression length |
+| **MaxPatternIterations** | 10,000,000 | Step budget for a single pattern match, plus one step per value byte |
+| **MaxModifierChainDepth** | 20 | Maximum chained modifiers |
+| **MaxPathSegments** | 100 segments | Maximum path length |
+| **MaxFieldNameLength** | 256 bytes | Maximum #.field name length |
 
 ### When to Adjust Limits
 
-**Increase limits when**:
-- Processing trusted internal documents
-- Documents naturally exceed limits (e.g., 20MB configs)
-- Performance testing shows safe headroom
-- Running in controlled, isolated environments
+The defaults are sized so that legitimate documents rarely hit them, while bounding
+work and memory that grow faster than the input. Applications that process trusted
+documents may raise them; applications with tighter memory budgets may lower them.
 
-**Example**:
+Set limits once during program initialization, before any concurrent use of the
+package. They are read without synchronization.
+
 ```go
-// Adjust limits for trusted environment (NOT recommended for untrusted input)
-// Note: Limits are package constants, cannot be changed at runtime
-
-// For documents >10MB, validate and chunk:
-if len(trustedXML) > xmldot.MaxDocumentSize {
-    // Process in sections
-    sections := splitXMLIntoSections(trustedXML)
-    for _, section := range sections {
-        result := xmldot.Get(section, path)
-        // Process section
-    }
+func init() {
+    // Trusted network device configurations can exceed the default size
+    xmldot.MaxDocumentSize = 512 * 1024 * 1024
 }
 ```
-
-**Never adjust limits when**:
-- Processing untrusted user input
-- Accepting XML from external APIs
-- Handling uploaded files
-- Operating in shared/multi-tenant environments
-
-### Performance vs Security Trade-offs
-
-| Limit | Performance Impact | Security Benefit | Recommendation |
-|-------|-------------------|------------------|----------------|
-| MaxDocumentSize | High (rejects large docs) | High (prevents memory exhaustion) | Keep default |
-| MaxNestingDepth | Low (rarely hit) | High (prevents stack overflow) | Keep default |
-| MaxAttributes | Low (rarely hit) | High (prevents DoS) | Keep default |
-| MaxTokenSize | Low (rarely hit) | High (prevents buffer overflow) | Keep default |
-| MaxWildcardResults | Medium (limits matches) | High (prevents memory exhaustion) | Keep default |
-| MaxRecursiveOperations | Medium (limits recursion) | High (prevents CPU exhaustion) | Keep default |
-| MaxPathSegments | Low (rarely hit) | Medium (prevents complex paths) | Can increase for deep paths |
-
----
 
 ## Safe Usage Patterns
 
@@ -599,7 +502,7 @@ result := xmldot.Get(userXML, "data.users.*.name")  // Single-level only
 ```go
 func handleXMLUpload(w http.ResponseWriter, r *http.Request) {
     // Limit request body size
-    r.Body = http.MaxBytesReader(w, r.Body, xmldot.MaxDocumentSize)
+    r.Body = http.MaxBytesReader(w, r.Body, int64(xmldot.MaxDocumentSize))
 
     xmlData, err := io.ReadAll(r.Body)
     if err != nil {
@@ -749,7 +652,7 @@ result := xmldot.Get(string(uploadedXML), path)
 **Safe**:
 ```go
 // Limit read size
-limitedReader := io.LimitReader(r.Body, xmldot.MaxDocumentSize)
+limitedReader := io.LimitReader(r.Body, int64(xmldot.MaxDocumentSize))
 uploadedXML, _ := io.ReadAll(limitedReader)
 result := xmldot.Get(string(uploadedXML), path)
 ```
@@ -871,19 +774,20 @@ XMLDOT provides comprehensive security protection:
 **Built-in Protections**:
 - ✅ XXE prevention (no external entity resolution)
 - ✅ Entity expansion protection (no entity processing)
-- ✅ Document size limits (10MB default)
+- ✅ Document size limits (100 MB default)
 - ✅ Nesting depth limits (100 levels)
-- ✅ Attribute flood protection (100 attributes)
-- ✅ Token size limits (1MB tokens)
-- ✅ Filter depth limits (10 levels)
-- ✅ Wildcard result limits (1000 results)
+- ✅ Attribute flood protection (1000 attributes)
+- ✅ Token size limits (1 MB tokens)
+- ✅ Filter limits (4096-byte expressions, 10 levels, bounded pattern matching)
+- ✅ Array and wildcard result limits (100,000 results)
 - ✅ Path segment limits (100 segments)
-- ✅ Recursive operation limits (10,000 ops)
-- ✅ Set value size limits (5MB values)
+- ✅ Recursive operation budget (scales with document size)
+- ✅ Set value size limits (100 MB values)
 - ✅ Automatic XML escaping (injection prevention)
 
 **Safe Usage Checklist**:
 - [ ] Validate untrusted XML with Valid() or ValidateWithError()
+- [ ] Check Result.Err when a missing result matters
 - [ ] Check document size before processing
 - [ ] Avoid Optimistic mode with untrusted input
 - [ ] Whitelist allowed paths if user-controlled
@@ -894,8 +798,8 @@ XMLDOT provides comprehensive security protection:
 
 **Security Limits**:
 - All limits enabled by default
-- No configuration required
-- Fail-safe behavior (truncation, not crashes)
+- Adjustable package variables, set once at initialization
+- Exceeding a limit returns a *LimitError, never a truncated result
 - Predictable resource usage
 
 For more information:

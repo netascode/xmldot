@@ -18,20 +18,24 @@ import (
 //   - Array count: "elements.element.#"
 //   - Text content: "element.%"
 //   - Wildcards: "root.*.name" or "root.**.price"
-//   - Filters: "users.user[age>21]" or "items.item[@id=5]"
+//   - Filters: "users.user.#(age>21)" or "items.item.#(@id==5)"
 //
 // Security Considerations:
 //
 // This function implements several security protections:
-//   - Document size limit: Documents larger than MaxDocumentSize (10MB) are rejected
-//   - Nesting depth limit: XML nesting deeper than MaxNestingDepth (100 levels) is truncated
-//   - Attribute limit: Elements with more than MaxAttributes (100) have excess attributes ignored
-//   - Token size limit: Tokens larger than MaxTokenSize (1MB) are truncated
+//   - Document size limit: Documents larger than MaxDocumentSize are rejected
+//   - Nesting depth limit: XML nested deeper than MaxNestingDepth is rejected
+//   - Attribute limit: Elements with more than MaxAttributes attributes are rejected
+//   - Token size limit: Names and attribute values larger than MaxTokenSize are rejected
+//   - Result limits: Queries collecting more than MaxArrayResults or MaxWildcardResults
+//     matches are rejected
 //   - DOCTYPE skipping: DOCTYPE declarations are skipped to prevent XXE attacks
 //
 // These limits protect against denial-of-service and memory exhaustion attacks.
-// For trusted XML documents where these limits might be restrictive, the constants
-// can be adjusted in parser.go.
+// Exceeding a limit returns a Null Result whose Err field holds a *LimitError,
+// so a limit violation is never mistaken for a missing element.
+// For trusted XML documents where these limits might be restrictive, the limit
+// variables in limits.go can be adjusted during program initialization.
 //
 // Note: This parser does NOT expand entity references and does NOT process external
 // entities, providing secure-by-default behavior against XXE vulnerabilities.
@@ -73,12 +77,14 @@ func GetString(xml string, path string) Result {
 }
 
 // GetBytes is like Get but accepts xml as a byte slice for zero-copy efficiency.
-// Security: Documents larger than MaxDocumentSize (10MB) are rejected to prevent
-// memory exhaustion attacks.
-func GetBytes(xml []byte, path string) Result {
+// Security: Documents larger than MaxDocumentSize are rejected, and queries that
+// exceed any security limit return a Null Result with Err set to a *LimitError.
+func GetBytes(xml []byte, path string) (result Result) {
+	defer recoverLimitResult(&result)
+
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return Result{Type: Null}
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return Result{Type: Null, Err: err}
 	}
 
 	// Parse the path into segments
@@ -87,22 +93,15 @@ func GetBytes(xml []byte, path string) Result {
 		return Result{Type: Null}
 	}
 
+	// All recursive wildcards in the query share one operation budget
+	attachSearchBudget(segments, len(xml))
+
 	// Create parser
 	parser := newXMLParser(xml)
 
 	// Execute the query
 	return executeQuery(parser, segments, 0)
 }
-
-const (
-	// MaxWildcardResults is the maximum number of results from wildcard queries.
-	// This prevents memory exhaustion from recursive wildcard queries.
-	MaxWildcardResults = 1000
-
-	// MaxRecursiveOperations is the maximum number of recursive search operations.
-	// This prevents CPU exhaustion from exponential blowup in recursive wildcard queries.
-	MaxRecursiveOperations = 10000
-)
 
 // elementMatch represents a matched element with its attributes and content
 type elementMatch struct {
@@ -114,22 +113,75 @@ type elementMatch struct {
 
 // searchContext tracks recursive search operations to prevent DoS attacks
 type searchContext struct {
-	operations int
-	results    *[]Result
+	budget  *searchBudget
+	results *[]Result
+}
+
+// searchBudget is the operation budget shared by all recursive wildcard searches
+// of a single query, so that chained "**" segments cannot multiply the work.
+type searchBudget struct {
+	operations    int
+	maxOperations int
+}
+
+// newSearchBudget creates a budget that is the larger of MaxRecursiveOperations and
+// the document size, so that recursive searches over any document within
+// MaxDocumentSize complete.
+func newSearchBudget(docSize int) *searchBudget {
+	return &searchBudget{maxOperations: max(MaxRecursiveOperations, docSize)}
+}
+
+// attachSearchBudget gives all recursive wildcard segments of a query one shared budget.
+// segments must be the query's own copy, as returned by parsePath.
+func attachSearchBudget(segments []PathSegment, docSize int) {
+	var budget *searchBudget
+	for i := range segments {
+		if segments[i].Type == SegmentWildcard && segments[i].Wildcard {
+			if budget == nil {
+				budget = newSearchBudget(docSize)
+			}
+			segments[i].budget = budget
+		}
+	}
+}
+
+// newSearchContext creates a search context using budget, or a new budget for a
+// document of docSize bytes if budget is nil.
+func newSearchContext(results *[]Result, budget *searchBudget, docSize int) *searchContext {
+	if budget == nil {
+		budget = newSearchBudget(docSize)
+	}
+	return &searchContext{budget: budget, results: results}
+}
+
+// add appends results, aborting the query if MaxWildcardResults would be exceeded.
+func (ctx *searchContext) add(results ...Result) {
+	if n := len(*ctx.results) + len(results); n > MaxWildcardResults {
+		exceedLimit("MaxWildcardResults", n, MaxWildcardResults)
+	}
+	*ctx.results = append(*ctx.results, results...)
+}
+
+// step records one search operation, aborting the query if the operation budget or
+// MaxNestingDepth is exceeded.
+func (ctx *searchContext) step(depth int) {
+	ctx.budget.operations++
+	if ctx.budget.operations > ctx.budget.maxOperations {
+		exceedLimit("MaxRecursiveOperations", ctx.budget.operations, ctx.budget.maxOperations)
+	}
+	if depth > MaxNestingDepth {
+		exceedLimit("MaxNestingDepth", depth, MaxNestingDepth)
+	}
 }
 
 // collectFragmentRoots collects all root elements matching the target name in a fragment.
 // This enables array operations on fragments: <user>A</user><user>B</user>
-// Security: Limited to MaxWildcardResults (1000) elements
-func collectFragmentRoots(parser *xmlParser, targetName string) []elementMatch {
+// If stopAfter is positive, collection stops after that many matches.
+// Security: Exceeding MaxArrayResults aborts the query with a *LimitError
+func collectFragmentRoots(parser *xmlParser, targetName string, stopAfter int) []elementMatch {
 	var matches []elementMatch
 
 	for parser.skipToNextElement() {
-		// Security limit: prevent collecting too many roots
-		if len(matches) >= MaxWildcardResults {
-			break
-		}
-
 		parser.next() // skip '<'
 		elemName, attrs, isSelfClosing := parser.parseElementName()
 
@@ -150,15 +202,33 @@ func collectFragmentRoots(parser *xmlParser, targetName string) []elementMatch {
 			content = parser.parseElementContent(elemName)
 		}
 
+		checkArrayResults(len(matches))
 		matches = append(matches, elementMatch{
 			name:          elemName,
 			attrs:         attrs,
 			content:       content,
 			isSelfClosing: isSelfClosing,
 		})
+		if stopAfter > 0 && len(matches) >= stopAfter {
+			break
+		}
 	}
 
 	return matches
+}
+
+// matchesNeeded returns how many matches of segments[segIndex] are needed to
+// answer the query, or 0 if all matches are needed. Indexed access (.N) only
+// needs the first N+1 matches, so it does not count further siblings against
+// MaxArrayResults.
+func matchesNeeded(segments []PathSegment, segIndex int) int {
+	if segIndex+1 < len(segments) {
+		next := segments[segIndex+1]
+		if next.Type == SegmentIndex && next.Index >= 0 {
+			return next.Index + 1
+		}
+	}
+	return 0
 }
 
 // executeQuery recursively matches path segments against XML structure
@@ -177,7 +247,7 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 		nextSeg := segments[1]
 		if nextSeg.Type == SegmentIndex || nextSeg.Type == SegmentCount || nextSeg.Type == SegmentFieldExtraction {
 			// Array operation on fragment roots - collect all matching roots
-			matches := collectFragmentRoots(parser, currentSeg.Value)
+			matches := collectFragmentRoots(parser, currentSeg.Value, matchesNeeded(segments, segIndex))
 
 			if len(matches) == 0 {
 				return Result{Type: Null}
@@ -282,16 +352,13 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 				content = parser.parseElementContent(elemName)
 			}
 
+			checkArrayResults(len(allMatches))
 			allMatches = append(allMatches, elementMatch{
 				name:          elemName,
 				attrs:         attrs,
 				content:       content,
 				isSelfClosing: isSelfClosing,
 			})
-
-			if len(allMatches) >= MaxWildcardResults {
-				break
-			}
 		}
 
 		// Now apply field extraction to these matches
@@ -302,7 +369,8 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 	// This is the GJSON pattern: element.#(condition)
 	hasFollowingFilter := !isLastSegment && segments[segIndex+1].Type == SegmentFilter
 	if hasFollowingFilter && currentSeg.Type == SegmentElement {
-		// Collect all elements matching current segment
+		// Collect elements matching current segment and the filter
+		filterSeg := segments[segIndex+1]
 		var allMatches []elementMatch
 		for parser.skipToNextElement() {
 			parser.next()
@@ -322,14 +390,20 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 				content = parser.parseElementContent(elemName)
 			}
 
-			allMatches = append(allMatches, elementMatch{
+			// Only matches that pass the filter count towards MaxArrayResults, and
+			// #(condition) needs just the first one
+			match := elementMatch{
 				name:          elemName,
 				attrs:         attrs,
 				content:       content,
 				isSelfClosing: isSelfClosing,
-			})
-
-			if len(allMatches) >= MaxWildcardResults {
+			}
+			if !evaluateFilterOnMatch(filterSeg.Filter, match) {
+				continue
+			}
+			checkArrayResults(len(allMatches))
+			allMatches = append(allMatches, match)
+			if !filterSeg.FilterAll {
 				break
 			}
 		}
@@ -400,11 +474,6 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 		needsArray := !isLastSegment && (segments[segIndex+1].Type == SegmentIndex || segments[segIndex+1].Type == SegmentCount)
 
 		if needsArray || isWildcard || hasFilter {
-			// Security check: enforce wildcard result limit
-			if len(matches) >= MaxWildcardResults {
-				break // Stop collecting more matches when limit reached
-			}
-
 			// Collect this match for array/wildcard/filter handling
 			match := elementMatch{
 				name:          elemName,
@@ -416,10 +485,16 @@ func executeQuery(parser *xmlParser, segments []PathSegment, segIndex int) Resul
 			// If there's a filter, only collect if it matches
 			if hasFilter {
 				if evaluateFilterOnMatch(currentSeg.Filter, match) {
+					checkArrayResults(len(matches))
 					matches = append(matches, match)
 				}
 			} else {
+				checkArrayResults(len(matches))
 				matches = append(matches, match)
+			}
+			// Indexed access only needs matches up to the requested index
+			if needed := matchesNeeded(segments, segIndex); needed > 0 && len(matches) >= needed {
+				break
 			}
 			continue
 		}
@@ -691,7 +766,7 @@ func handleRecursiveWildcard(parser *xmlParser, segments []PathSegment, segIndex
 
 	// Recursively search for matches at any depth
 	var allResults []Result
-	ctx := &searchContext{operations: 0, results: &allResults}
+	ctx := newSearchContext(&allResults, segments[segIndex].budget, parser.dataLen)
 	recursiveSearchWithContext(parser, targetSeg, segments, nextSegIndex, ctx, 0)
 
 	if len(allResults) == 0 {
@@ -710,10 +785,7 @@ func handleRecursiveWildcard(parser *xmlParser, segments []PathSegment, segIndex
 // Security: limits recursion depth, result count, and total operations
 func recursiveSearchWithContext(parser *xmlParser, targetSeg PathSegment, segments []PathSegment, segIndex int, ctx *searchContext, depth int) {
 	// Security checks: limit recursion depth, result count, and total operations
-	ctx.operations++
-	if depth > MaxNestingDepth || len(*ctx.results) >= MaxWildcardResults || ctx.operations >= MaxRecursiveOperations {
-		return
-	}
+	ctx.step(depth)
 
 	isLastSegment := segIndex == len(segments)-1
 
@@ -735,22 +807,12 @@ func recursiveSearchWithContext(parser *xmlParser, targetSeg PathSegment, segmen
 			recursiveSearchWithContext(contentParser, targetSeg, segments, segIndex, ctx, depth+1)
 		}
 
-		// Check operation limit again after recursion
-		if ctx.operations >= MaxRecursiveOperations {
-			return
-		}
-
 		// Then check if this element itself matches
 		if targetSeg.matches(elemName) {
-			// Security check: stop if we've reached the result limit
-			if len(*ctx.results) >= MaxWildcardResults {
-				return
-			}
-
 			// Found a match!
 			if isLastSegment {
 				// This is the final segment - add the result
-				*ctx.results = append(*ctx.results, Result{
+				ctx.add(Result{
 					Type: Element,
 					Str:  unescapeXML(extractTextContent(content)),
 					Raw:  content,
@@ -764,7 +826,7 @@ func recursiveSearchWithContext(parser *xmlParser, targetSeg PathSegment, segmen
 					if attrValue, ok := attrs[attrName]; ok {
 						// Check if this is the final segment after attribute
 						if segIndex+2 >= len(segments) {
-							*ctx.results = append(*ctx.results, Result{
+							ctx.add(Result{
 								Type: Attribute,
 								Str:  attrValue,
 								Raw:  attrValue,
@@ -773,7 +835,7 @@ func recursiveSearchWithContext(parser *xmlParser, targetSeg PathSegment, segmen
 					}
 				case SegmentText:
 					textContent := extractDirectTextOnly(content)
-					*ctx.results = append(*ctx.results, Result{
+					ctx.add(Result{
 						Type: String,
 						Str:  unescapeXML(textContent),
 						Raw:  content,
@@ -790,16 +852,16 @@ func recursiveSearchWithContext(parser *xmlParser, targetSeg PathSegment, segmen
 					result := executeFieldExtraction([]elementMatch{match}, nextSegment)
 					// Field extraction always returns Array (even if empty)
 					if result.Type == Array {
-						*ctx.results = append(*ctx.results, result.Results...)
+						ctx.add(result.Results...)
 					}
 				default:
 					contentParser := newXMLParser([]byte(content))
 					result := executeQuery(contentParser, segments, segIndex+1)
 					if result.Type != Null {
 						if result.Type == Array {
-							*ctx.results = append(*ctx.results, result.Results...)
+							ctx.add(result.Results...)
 						} else {
-							*ctx.results = append(*ctx.results, result)
+							ctx.add(result)
 						}
 					}
 				}
@@ -853,12 +915,14 @@ func GetStringWithOptions(xml string, path string, opts *Options) Result {
 }
 
 // GetBytesWithOptions is like GetBytes but accepts Options for behavioral control.
-// Security: Documents larger than MaxDocumentSize (10MB) are rejected to prevent
-// memory exhaustion attacks.
-func GetBytesWithOptions(xml []byte, path string, opts *Options) Result {
+// Security: Documents larger than MaxDocumentSize are rejected, and queries that
+// exceed any security limit return a Null Result with Err set to a *LimitError.
+func GetBytesWithOptions(xml []byte, path string, opts *Options) (result Result) {
+	defer recoverLimitResult(&result)
+
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return Result{Type: Null}
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return Result{Type: Null, Err: err}
 	}
 
 	// Fast path: if opts uses all defaults, use standard Get path
@@ -867,6 +931,7 @@ func GetBytesWithOptions(xml []byte, path string, opts *Options) Result {
 		if len(segments) == 0 {
 			return Result{Type: Null}
 		}
+		attachSearchBudget(segments, len(xml))
 		parser := newXMLParser(xml)
 		return executeQuery(parser, segments, 0)
 	}
@@ -876,6 +941,9 @@ func GetBytesWithOptions(xml []byte, path string, opts *Options) Result {
 	if len(segments) == 0 {
 		return Result{Type: Null}
 	}
+
+	// All recursive wildcards in the query share one operation budget
+	attachSearchBudget(segments, len(xml))
 
 	// Create parser
 	parser := newXMLParser(xml)
@@ -928,7 +996,7 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 		nextSeg := segments[1]
 		if nextSeg.Type == SegmentIndex || nextSeg.Type == SegmentCount || nextSeg.Type == SegmentFieldExtraction {
 			// Array operation on fragment roots - collect all matching roots
-			matches := collectFragmentRoots(parser, currentSeg.Value)
+			matches := collectFragmentRoots(parser, currentSeg.Value, matchesNeeded(segments, segIndex))
 
 			if len(matches) == 0 {
 				return Result{Type: Null}
@@ -1027,16 +1095,13 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 				content = parser.parseElementContent(elemName)
 			}
 
+			checkArrayResults(len(allMatches))
 			allMatches = append(allMatches, elementMatch{
 				name:          elemName,
 				attrs:         attrs,
 				content:       content,
 				isSelfClosing: isSelfClosing,
 			})
-
-			if len(allMatches) >= MaxWildcardResults {
-				break
-			}
 		}
 
 		return executeFieldExtractionWithOptions(allMatches, segments[segIndex+1], opts)
@@ -1046,6 +1111,7 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 	// This is the GJSON pattern with options: element.#(condition)
 	hasFollowingFilter := !isLastSegment && segments[segIndex+1].Type == SegmentFilter
 	if hasFollowingFilter && currentSeg.Type == SegmentElement {
+		filterSeg := segments[segIndex+1]
 		var allMatches []elementMatch
 		for parser.skipToNextElement() {
 			parser.next()
@@ -1065,14 +1131,20 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 				content = parser.parseElementContent(elemName)
 			}
 
-			allMatches = append(allMatches, elementMatch{
+			// Only matches that pass the filter count towards MaxArrayResults, and
+			// #(condition) needs just the first one
+			match := elementMatch{
 				name:          elemName,
 				attrs:         attrs,
 				content:       content,
 				isSelfClosing: isSelfClosing,
-			})
-
-			if len(allMatches) >= MaxWildcardResults {
+			}
+			if !evaluateFilterOnMatch(filterSeg.Filter, match) {
+				continue
+			}
+			checkArrayResults(len(allMatches))
+			allMatches = append(allMatches, match)
+			if !filterSeg.FilterAll {
 				break
 			}
 		}
@@ -1129,10 +1201,6 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 		needsArray := !isLastSegment && (segments[segIndex+1].Type == SegmentIndex || segments[segIndex+1].Type == SegmentCount)
 
 		if needsArray || isWildcard || hasFilter {
-			if len(matches) >= MaxWildcardResults {
-				break
-			}
-
 			match := elementMatch{
 				name:          elemName,
 				attrs:         attrs,
@@ -1142,10 +1210,16 @@ func executeQueryWithOptions(parser *xmlParser, segments []PathSegment, segIndex
 
 			if hasFilter {
 				if evaluateFilterOnMatch(currentSeg.Filter, match) {
+					checkArrayResults(len(matches))
 					matches = append(matches, match)
 				}
 			} else {
+				checkArrayResults(len(matches))
 				matches = append(matches, match)
+			}
+			// Indexed access only needs matches up to the requested index
+			if needed := matchesNeeded(segments, segIndex); needed > 0 && len(matches) >= needed {
+				break
 			}
 			continue
 		}
@@ -1385,7 +1459,7 @@ func handleRecursiveWildcardWithOptions(parser *xmlParser, segments []PathSegmen
 	targetSeg := segments[nextSegIndex]
 
 	var allResults []Result
-	ctx := &searchContext{operations: 0, results: &allResults}
+	ctx := newSearchContext(&allResults, segments[segIndex].budget, parser.dataLen)
 	recursiveSearchWithContextAndOptions(parser, targetSeg, segments, nextSegIndex, ctx, 0, opts)
 
 	if len(allResults) == 0 {
@@ -1402,10 +1476,7 @@ func handleRecursiveWildcardWithOptions(parser *xmlParser, segments []PathSegmen
 
 // recursiveSearchWithContextAndOptions is like recursiveSearchWithContext but with Options support
 func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegment, segments []PathSegment, segIndex int, ctx *searchContext, depth int, opts *Options) {
-	ctx.operations++
-	if depth > MaxNestingDepth || len(*ctx.results) >= MaxWildcardResults || ctx.operations >= MaxRecursiveOperations {
-		return
-	}
+	ctx.step(depth)
 
 	isLastSegment := segIndex == len(segments)-1
 
@@ -1425,17 +1496,9 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 			recursiveSearchWithContextAndOptions(contentParser, targetSeg, segments, segIndex, ctx, depth+1, opts)
 		}
 
-		if ctx.operations >= MaxRecursiveOperations {
-			return
-		}
-
 		if targetSeg.matchesWithOptions(elemName, opts) {
-			if len(*ctx.results) >= MaxWildcardResults {
-				return
-			}
-
 			if isLastSegment {
-				*ctx.results = append(*ctx.results, Result{
+				ctx.add(Result{
 					Type: Element,
 					Str:  unescapeXML(extractTextContent(content)),
 					Raw:  content,
@@ -1449,7 +1512,7 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 						for k, v := range attrs {
 							if toLowerASCII(k) == attrName {
 								if segIndex+2 >= len(segments) {
-									*ctx.results = append(*ctx.results, Result{
+									ctx.add(Result{
 										Type: Attribute,
 										Str:  v,
 										Raw:  v,
@@ -1460,7 +1523,7 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 					} else {
 						if attrValue, ok := attrs[attrName]; ok {
 							if segIndex+2 >= len(segments) {
-								*ctx.results = append(*ctx.results, Result{
+								ctx.add(Result{
 									Type: Attribute,
 									Str:  attrValue,
 									Raw:  attrValue,
@@ -1470,7 +1533,7 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 					}
 				case SegmentText:
 					textContent := extractDirectTextOnly(content)
-					*ctx.results = append(*ctx.results, Result{
+					ctx.add(Result{
 						Type: String,
 						Str:  unescapeXML(textContent),
 						Raw:  content,
@@ -1480,9 +1543,9 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 					result := executeQueryWithOptions(contentParser, segments, segIndex+1, opts)
 					if result.Type != Null {
 						if result.Type == Array {
-							*ctx.results = append(*ctx.results, result.Results...)
+							ctx.add(result.Results...)
 						} else {
-							*ctx.results = append(*ctx.results, result)
+							ctx.add(result)
 						}
 					}
 				}
@@ -1495,8 +1558,7 @@ func recursiveSearchWithContextAndOptions(parser *xmlParser, targetSeg PathSegme
 // This implements the GJSON #.field syntax for extracting values from array elements.
 // The field can be an element name, attribute (@attr), or text content (%).
 //
-// Security: Results are limited to MaxWildcardResults (1,000) items. Extraction exceeding
-// this limit will be silently truncated to prevent memory exhaustion.
+// Security: Extracting more than MaxArrayResults items aborts the query with a *LimitError.
 func executeFieldExtraction(matches []elementMatch, segment PathSegment) Result {
 	fieldName := segment.Field
 	if fieldName == "" {
@@ -1505,49 +1567,38 @@ func executeFieldExtraction(matches []elementMatch, segment PathSegment) Result 
 
 	// Pre-allocate results array with estimated capacity
 	results := make([]Result, 0, len(matches))
-	totalExtracted := 0
 
 	// Determine field type (attribute, text, or element)
 	isAttribute := strings.HasPrefix(fieldName, "@")
 	isText := fieldName == "%"
 
 	for _, match := range matches {
-		// Security: Check result limit
-		if totalExtracted >= MaxWildcardResults {
-			break
-		}
-
 		if isAttribute {
 			// Extract attribute value
 			attrName := fieldName[1:] // Remove @ prefix
 			if attrValue, ok := match.attrs[attrName]; ok {
+				checkArrayResults(len(results))
 				results = append(results, Result{
 					Type: Attribute,
 					Str:  attrValue,
 					Raw:  attrValue,
 				})
-				totalExtracted++
 			}
 		} else if isText {
 			// Extract text content only
 			textContent := extractDirectTextOnly(match.content)
 			if textContent != "" {
+				checkArrayResults(len(results))
 				results = append(results, Result{
 					Type: String,
 					Str:  unescapeXML(textContent),
 					Raw:  textContent,
 				})
-				totalExtracted++
 			}
 		} else {
 			// Extract child element(s) with matching name
 			parser := newXMLParser([]byte(match.content))
 			for parser.skipToNextElement() {
-				// Security: Check limit on each iteration
-				if totalExtracted >= MaxWildcardResults {
-					break
-				}
-
 				parser.next() // skip '<'
 				elemName, _, isSelfClosing := parser.parseElementName()
 
@@ -1568,12 +1619,12 @@ func executeFieldExtraction(matches []elementMatch, segment PathSegment) Result 
 					content = parser.parseElementContent(elemName)
 				}
 
+				checkArrayResults(len(results))
 				results = append(results, Result{
 					Type: Element,
 					Str:  unescapeXML(extractTextContent(content)),
 					Raw:  content,
 				})
-				totalExtracted++
 			}
 		}
 	}
@@ -1602,8 +1653,7 @@ func executeFieldExtraction(matches []elementMatch, segment PathSegment) Result 
 
 // executeFieldExtractionWithOptions is like executeFieldExtraction but with Options support
 //
-// Security: Results are limited to MaxWildcardResults (1,000) items. Extraction exceeding
-// this limit will be silently truncated to prevent memory exhaustion.
+// Security: Extracting more than MaxArrayResults items aborts the query with a *LimitError.
 func executeFieldExtractionWithOptions(matches []elementMatch, segment PathSegment, opts *Options) Result {
 	// Treat nil options as default options
 	if opts == nil {
@@ -1616,16 +1666,11 @@ func executeFieldExtractionWithOptions(matches []elementMatch, segment PathSegme
 	}
 
 	results := make([]Result, 0, len(matches))
-	totalExtracted := 0
 
 	isAttribute := strings.HasPrefix(fieldName, "@")
 	isText := fieldName == "%"
 
 	for _, match := range matches {
-		if totalExtracted >= MaxWildcardResults {
-			break
-		}
-
 		if isAttribute {
 			attrName := fieldName[1:]
 			// Case-insensitive attribute lookup
@@ -1633,35 +1678,35 @@ func executeFieldExtractionWithOptions(matches []elementMatch, segment PathSegme
 				attrNameLower := toLowerASCII(attrName)
 				for k, v := range match.attrs {
 					if toLowerASCII(k) == attrNameLower {
+						checkArrayResults(len(results))
 						results = append(results, Result{
 							Type: Attribute,
 							Str:  v,
 							Raw:  v,
 						})
-						totalExtracted++
 						break // Only match first attribute with this name
 					}
 				}
 			} else {
 				// Case-sensitive attribute lookup
 				if attrValue, ok := match.attrs[attrName]; ok {
+					checkArrayResults(len(results))
 					results = append(results, Result{
 						Type: Attribute,
 						Str:  attrValue,
 						Raw:  attrValue,
 					})
-					totalExtracted++
 				}
 			}
 		} else if isText {
 			textContent := extractDirectTextOnly(match.content)
 			if textContent != "" {
+				checkArrayResults(len(results))
 				results = append(results, Result{
 					Type: String,
 					Str:  unescapeXML(textContent),
 					Raw:  textContent,
 				})
-				totalExtracted++
 			}
 		} else {
 			// Extract child element(s) with matching name (case-insensitive if needed)
@@ -1672,10 +1717,6 @@ func executeFieldExtractionWithOptions(matches []elementMatch, segment PathSegme
 			}
 
 			for parser.skipToNextElement() {
-				if totalExtracted >= MaxWildcardResults {
-					break
-				}
-
 				parser.next()
 				elemName, _, isSelfClosing := parser.parseElementName()
 
@@ -1699,12 +1740,12 @@ func executeFieldExtractionWithOptions(matches []elementMatch, segment PathSegme
 					content = parser.parseElementContent(elemName)
 				}
 
+				checkArrayResults(len(results))
 				results = append(results, Result{
 					Type: Element,
 					Str:  unescapeXML(extractTextContent(content)),
 					Raw:  content,
 				})
-				totalExtracted++
 			}
 		}
 	}
@@ -1758,10 +1799,10 @@ func handleFilterQuery(parser *xmlParser, segments []PathSegment, segIndex int) 
 
 		// Evaluate filter condition
 		if evaluateFilterOnMatch(currentSeg.Filter, match) {
+			checkArrayResults(len(matches))
 			matches = append(matches, match)
-
-			// Security: enforce result limit
-			if len(matches) >= MaxWildcardResults {
+			// #(condition) needs just the first match
+			if !currentSeg.FilterAll {
 				break
 			}
 		}
@@ -2005,10 +2046,10 @@ func handleFilterQueryWithOptions(parser *xmlParser, segments []PathSegment, seg
 
 		// Evaluate filter condition
 		if evaluateFilterOnMatch(currentSeg.Filter, match) {
+			checkArrayResults(len(matches))
 			matches = append(matches, match)
-
-			// Security: enforce result limit
-			if len(matches) >= MaxWildcardResults {
+			// #(condition) needs just the first match
+			if !currentSeg.FilterAll {
 				break
 			}
 		}

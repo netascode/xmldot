@@ -133,18 +133,23 @@ func TestModifierFramework_DuplicateRegistrationError(t *testing.T) {
 }
 
 func TestModifierFramework_ChainDepthLimit(t *testing.T) {
-	// Test that chains exceeding MaxModifierChainDepth return Null
+	// Test that chains exceeding MaxModifierChainDepth fail with a limit error
 	modifiers := make([]string, MaxModifierChainDepth+5)
 	for i := range modifiers {
 		modifiers[i] = "reverse"
 	}
 
 	input := Result{Type: Array, Results: []Result{{Type: String, Str: "test"}}}
-	result := applyModifiers(input, modifiers)
+	var result Result
+	func() {
+		defer recoverLimitResult(&result)
+		result = applyModifiers(input, modifiers)
+	}()
 
 	if result.Type != Null {
 		t.Errorf("Expected Null for excessive chain depth, got %v", result.Type)
 	}
+	requireLimitError(t, result.Err, "MaxModifierChainDepth")
 }
 
 func TestModifierFramework_EmptyModifierName(t *testing.T) {
@@ -1146,7 +1151,7 @@ func BenchmarkModifierPretty1KB(b *testing.B) {
 	var xmlBuilder strings.Builder
 	xmlBuilder.WriteString("<root>")
 	for i := 0; i < 20; i++ {
-		xmlBuilder.WriteString(fmt.Sprintf("<item id=\"%d\"><name>Item %d</name><value>%d</value></item>", i, i, i*10))
+		fmt.Fprintf(&xmlBuilder, "<item id=\"%d\"><name>Item %d</name><value>%d</value></item>", i, i, i*10)
 	}
 	xmlBuilder.WriteString("</root>")
 
@@ -1168,7 +1173,7 @@ func BenchmarkModifierUgly1KB(b *testing.B) {
 	var xmlBuilder strings.Builder
 	xmlBuilder.WriteString("<root>\n")
 	for i := 0; i < 20; i++ {
-		xmlBuilder.WriteString(fmt.Sprintf("  <item id=\"%d\">\n    <name>Item %d</name>\n    <value>%d</value>\n  </item>\n", i, i, i*10))
+		fmt.Fprintf(&xmlBuilder, "  <item id=\"%d\">\n    <name>Item %d</name>\n    <value>%d</value>\n  </item>\n", i, i, i*10)
 	}
 	xmlBuilder.WriteString("</root>")
 

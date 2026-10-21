@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -231,6 +232,9 @@ func TestDeleteBytes(t *testing.T) {
 
 // Test error cases
 func TestDelete_Errors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name    string
 		xml     string
@@ -247,7 +251,7 @@ func TestDelete_Errors(t *testing.T) {
 			name:    "document too large",
 			xml:     string(make([]byte, MaxDocumentSize+1)),
 			path:    "root.test",
-			wantErr: ErrMalformedXML,
+			wantErr: ErrLimitExceeded,
 		},
 	}
 
@@ -257,7 +261,7 @@ func TestDelete_Errors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Delete() expected error, got nil")
 			}
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Delete() error = %v, want %v", err, tt.wantErr)
 			}
 		})

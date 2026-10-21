@@ -10,21 +10,29 @@ import (
 	"sync"
 )
 
-// MaxPathSegments is the maximum number of path segments allowed in a query path.
-// This prevents DoS attacks with extremely complex paths.
-const MaxPathSegments = 100
-
-// MaxFieldNameLength is the maximum length of a field name in #.field syntax.
-// This prevents DoS attacks with extremely long field names.
-const MaxFieldNameLength = 256
-
 // Path cache for performance optimization
 // Thread-safe LRU-style cache for parsed paths to avoid repeated parsing
 var (
-	pathCache      = make(map[string][]PathSegment)
+	pathCache      = make(map[string]pathCacheEntry)
 	pathCacheMu    sync.RWMutex
 	pathCacheLimit = 256 // Keep cache size reasonable
 )
+
+// pathCacheEntry is a cached parse result together with the path-related limits
+// it was parsed under, so that a change to those limits invalidates the entry.
+type pathCacheEntry struct {
+	segments []PathSegment
+	limits   pathLimits
+}
+
+// pathLimits holds the security limits enforced while parsing a path.
+type pathLimits struct {
+	pathSegments, filterExpressionLength, fieldNameLength, namespacePrefixLength int
+}
+
+func currentPathLimits() pathLimits {
+	return pathLimits{MaxPathSegments, MaxFilterExpressionLength, MaxFieldNameLength, MaxNamespacePrefixLength}
+}
 
 // SegmentType represents the type of a path segment.
 type SegmentType int
@@ -97,6 +105,9 @@ type PathSegment struct {
 	// Modifiers execute in order after the path segment resolves.
 	// Example: "items.item|@sort|@first" applies @sort then @first to "item" results.
 	Modifiers []string
+
+	// budget is the recursive search budget shared by the "**" segments of one query.
+	budget *searchBudget
 }
 
 // Filter represents a query filter condition.
@@ -119,7 +130,7 @@ type Filter struct {
 //   - "root.*.name" - single-level wildcard
 //   - "root.**.price" - recursive wildcard
 //
-// Security: Paths with more than MaxPathSegments segments are rejected.
+// Security: Paths with more than MaxPathSegments segments abort the query with a *LimitError.
 // Performance: Uses a thread-safe LRU cache to avoid re-parsing common paths.
 func parsePath(path string) []PathSegment {
 	if path == "" {
@@ -127,8 +138,10 @@ func parsePath(path string) []PathSegment {
 	}
 
 	// Check cache first (read lock)
+	limits := currentPathLimits()
 	pathCacheMu.RLock()
-	if cached, ok := pathCache[path]; ok {
+	if entry, ok := pathCache[path]; ok && entry.limits == limits {
+		cached := entry.segments
 		pathCacheMu.RUnlock()
 		// Return a copy to prevent modification of cached data
 		result := make([]PathSegment, len(cached))
@@ -145,12 +158,12 @@ func parsePath(path string) []PathSegment {
 		pathCacheMu.Lock()
 		// Simple cache eviction: clear cache when it exceeds limit
 		if len(pathCache) >= pathCacheLimit {
-			pathCache = make(map[string][]PathSegment)
+			pathCache = make(map[string]pathCacheEntry)
 		}
 		// Store a copy to prevent external modification
 		cached := make([]PathSegment, len(segments))
 		copy(cached, segments)
-		pathCache[path] = cached
+		pathCache[path] = pathCacheEntry{segments: cached, limits: limits}
 		pathCacheMu.Unlock()
 	}
 
@@ -164,7 +177,7 @@ func parsePathInternal(path string) []PathSegment {
 
 	// Security check: enforce maximum path segment count
 	if len(parts) > MaxPathSegments {
-		return nil
+		exceedLimit("MaxPathSegments", len(parts), MaxPathSegments)
 	}
 
 	segments := make([]PathSegment, 0, len(parts))
@@ -294,7 +307,10 @@ func parsePathInternal(path string) []PathSegment {
 				}
 
 				// Validate field name
-				if isValidFieldName(fieldSeg.Field) && len(fieldSeg.Field) <= MaxFieldNameLength {
+				if len(fieldSeg.Field) > MaxFieldNameLength {
+					exceedLimit("MaxFieldNameLength", len(fieldSeg.Field), MaxFieldNameLength)
+				}
+				if isValidFieldName(fieldSeg.Field) {
 					processedSegments = append(processedSegments, fieldSeg)
 					i++ // Skip the next segment since we consumed it
 					continue
@@ -306,10 +322,23 @@ func parsePathInternal(path string) []PathSegment {
 		processedSegments = append(processedSegments, seg)
 	}
 
+	// Security check: reject namespace prefixes longer than MaxNamespacePrefixLength
+	for _, seg := range processedSegments {
+		if seg.Type != SegmentElement {
+			continue
+		}
+		if idx := strings.IndexByte(seg.Value, ':'); idx > MaxNamespacePrefixLength {
+			exceedLimit("MaxNamespacePrefixLength", idx, MaxNamespacePrefixLength)
+		}
+	}
+
 	return processedSegments
 }
 
-// splitPath splits a path on dots, handling escapes
+// splitPath splits a path on dots, handling escapes.
+// Filters ("#(...)") are kept intact: dots inside them belong to the filter's own
+// path or value (e.g. "#(a.b==1)", "#(price==19.99)"), and their backslash escapes
+// are preserved for the filter and pattern parsers.
 func splitPath(path string) []string {
 	if path == "" {
 		return nil
@@ -318,9 +347,32 @@ func splitPath(path string) []string {
 	var parts []string
 	var current strings.Builder
 	escaped := false
+	depth := 0     // nesting of parentheses inside a filter
+	var quote byte // active quote character inside a filter
 
 	for i := 0; i < len(path); i++ {
 		c := path[i]
+
+		if depth > 0 {
+			current.WriteByte(c)
+			switch {
+			case c == '\\' && i+1 < len(path):
+				// Keep the escape for the filter parser
+				i++
+				current.WriteByte(path[i])
+			case quote != 0:
+				if c == quote {
+					quote = 0
+				}
+			case c == '\'' || c == '"':
+				quote = c
+			case c == '(':
+				depth++
+			case c == ')':
+				depth--
+			}
+			continue
+		}
 
 		if escaped {
 			current.WriteByte(c)
@@ -333,11 +385,17 @@ func splitPath(path string) []string {
 			continue
 		}
 
-		if c == '.' {
+		switch c {
+		case '.':
 			// Split point
 			parts = append(parts, current.String())
 			current.Reset()
-		} else {
+		case '(':
+			current.WriteByte(c)
+			if strings.HasSuffix(current.String(), "#(") {
+				depth = 1
+			}
+		default:
 			current.WriteByte(c)
 		}
 	}
@@ -515,8 +573,8 @@ func toLowerASCII(s string) string {
 // Returns ("", localName) if no colon is present (no namespace).
 // Returns ("prefix", "localName") if colon is present.
 //
-// Security: If the prefix length exceeds MaxNamespacePrefixLength,
-// treats the entire name as unprefixed to prevent memory exhaustion attacks.
+// Security: If the prefix length exceeds MaxNamespacePrefixLength, the entire
+// name is treated as unprefixed.
 //
 // ⚠️ NAMESPACE SUPPORT - IMPORTANT LIMITATIONS ⚠️
 //
@@ -565,7 +623,8 @@ func toLowerASCII(s string) string {
 //	✗ Applications requiring namespace validation
 //
 // Security Note:
-//   - Prefix length limited to MaxNamespacePrefixLength (256) to prevent DoS attacks
+//   - Names with prefixes longer than MaxNamespacePrefixLength are treated as unprefixed;
+//     query paths with such prefixes are rejected with a *LimitError by parsePathInternal
 //   - Control characters in prefixes are validated and rejected
 //
 // For production systems requiring full XML Namespaces support, use encoding/xml.
@@ -575,7 +634,8 @@ func splitNamespace(name string) (prefix, localName string) {
 		return "", name
 	}
 
-	// Security: Check prefix length
+	// Security: Check prefix length. Element names from documents are matched
+	// as unprefixed names; paths are rejected earlier, in parsePathInternal.
 	if idx > MaxNamespacePrefixLength {
 		return "", name // Treat as unprefixed if too long
 	}

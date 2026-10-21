@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Daniel Schmidt
 
-// Package pattern provides wildcard pattern matching with ReDoS protection.
+// Package pattern provides wildcard pattern matching with bounded complexity.
 //
-// This package implements secure wildcard matching using dynamic programming
-// with configurable iteration limits to prevent Regular Expression Denial
-// of Service (ReDoS) attacks from pathological patterns.
+// This package implements wildcard matching with a linear-space, iterative
+// algorithm and a configurable step limit, so that pathological patterns can
+// neither exhaust memory nor run unbounded.
 package pattern
 
 // Match performs wildcard pattern matching with iteration limiting.
@@ -20,14 +20,16 @@ package pattern
 //	matched: true if pattern matches string
 //	stopped: true if complexity limit (maxIterations) was exceeded
 //
-// When stopped=true, matched will be false. This prevents ReDoS attacks
-// from pathological patterns like "a*a*a*a*b" on long strings.
+// When stopped=true, matched will be false and the caller must treat the
+// result as undetermined.
 //
-// Algorithm: Uses iterative dynamic programming (DP) approach.
-// DP table: dp[i][j] = whether str[0:i] matches pattern[0:j]
+// Algorithm: Greedy matching that backtracks only to the most recent '*'.
+// This is correct for '*' and '?' globbing because an earlier '*' never needs
+// to consume more input once a later '*' has matched.
 //
-// Time complexity: O(m*n) where m=len(str), n=len(pattern)
-// Space complexity: O(m*n) for DP table
+// Time complexity: O(m*n) worst case where m=len(str), n=len(pattern), O(m+n) typical.
+// A trailing '*' ends matching immediately.
+// Space complexity: O(m+n) for the rune slices
 //
 // Example usage:
 //
@@ -41,62 +43,55 @@ package pattern
 func Match(str, pattern string, maxIterations int) (matched, stopped bool) {
 	// Convert to runes for proper Unicode support
 	s := []rune(str)
-	p := []rune(pattern)
+	p, escapes := processEscapes([]rune(pattern))
 
-	sLen := len(s)
+	isStar := func(i int) bool { return p[i] == '*' && !escapes[i] }
 
-	// Handle escape sequences in pattern
-	p, escapes := processEscapes(p)
-	pLen := len(p)
-
-	// DP table: dp[i][j] = whether s[0:i] matches p[0:j]
-	dp := make([][]bool, sLen+1)
-	for i := range dp {
-		dp[i] = make([]bool, pLen+1)
+	// Start of the trailing run of stars, which matches any remaining input
+	trailingStars := len(p)
+	for trailingStars > 0 && isStar(trailingStars-1) {
+		trailingStars--
 	}
 
-	// Empty pattern matches empty string
-	dp[0][0] = true
-
-	// Leading stars match empty string
-	// Example: "***hello" should match "hello"
-	for j := 1; j <= pLen; j++ {
-		if p[j-1] == '*' && !escapes[j-1] {
-			dp[0][j] = dp[0][j-1]
-		}
-	}
-
+	si, pi := 0, 0
+	starPi, starSi := -1, 0
 	iterations := 0
 
-	// Fill DP table
-	for i := 1; i <= sLen; i++ {
-		for j := 1; j <= pLen; j++ {
-			iterations++
-			if iterations > maxIterations {
-				// Security: Complexity limit exceeded, stop processing
-				return false, true
-			}
+	for si < len(s) {
+		iterations++
+		if iterations > maxIterations {
+			return false, true
+		}
 
-			pChar := p[j-1]
-			escaped := escapes[j-1]
-
-			if pChar == '*' && !escaped {
-				// Star matches zero or more chars
-				// dp[i][j-1]: star matches zero chars (skip star)
-				// dp[i-1][j]: star matches one or more chars (consume char from string)
-				dp[i][j] = dp[i][j-1] || dp[i-1][j]
-			} else if pChar == '?' && !escaped {
-				// Question mark matches exactly one char
-				dp[i][j] = dp[i-1][j-1]
-			} else if pChar == s[i-1] {
-				// Exact match (including escaped wildcards treated as literals)
-				dp[i][j] = dp[i-1][j-1]
+		switch {
+		case pi < len(p) && !isStar(pi) && ((p[pi] == '?' && !escapes[pi]) || p[pi] == s[si]):
+			// Literal or '?' match: advance both
+			si++
+			pi++
+		case pi < len(p) && isStar(pi):
+			// A trailing star matches the rest of the input
+			if pi >= trailingStars {
+				return true, false
 			}
-			// else: characters don't match, dp[i][j] remains false
+			// Remember the star position and initially match zero characters
+			starPi, starSi = pi, si
+			pi++
+		case starPi != -1:
+			// Mismatch: let the most recent star consume one more character
+			starSi++
+			si = starSi
+			pi = starPi + 1
+		default:
+			return false, false
 		}
 	}
 
-	return dp[sLen][pLen], false
+	// Remaining pattern must consist only of stars
+	for pi < len(p) && isStar(pi) {
+		pi++
+	}
+
+	return pi == len(p), false
 }
 
 // processEscapes handles escape sequences in pattern.

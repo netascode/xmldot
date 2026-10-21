@@ -361,7 +361,7 @@ func BenchmarkFilter_EvaluateNumeric(b *testing.B) {
 	content := "<age>30</age>"
 	attrs := make(map[string]string)
 	for i := 0; i < b.N; i++ {
-		_ = evaluateFilterWithDepth(filter, content, attrs, 0)
+		_ = evaluateFilter(filter, content, attrs)
 	}
 }
 
@@ -370,7 +370,7 @@ func BenchmarkFilter_EvaluateString(b *testing.B) {
 	content := "<name>John</name>"
 	attrs := make(map[string]string)
 	for i := 0; i < b.N; i++ {
-		_ = evaluateFilterWithDepth(filter, content, attrs, 0)
+		_ = evaluateFilter(filter, content, attrs)
 	}
 }
 
@@ -379,7 +379,7 @@ func BenchmarkFilter_EvaluateAttribute(b *testing.B) {
 	content := ""
 	attrs := map[string]string{"id": "123"}
 	for i := 0; i < b.N; i++ {
-		_ = evaluateFilterWithDepth(filter, content, attrs, 0)
+		_ = evaluateFilter(filter, content, attrs)
 	}
 }
 

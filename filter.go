@@ -11,21 +11,6 @@ import (
 	"github.com/netascode/xmldot/internal/pattern"
 )
 
-const (
-	// MaxFilterExpressionLength is the maximum allowed length for filter expressions.
-	// This prevents DoS attacks with extremely long filter strings.
-	MaxFilterExpressionLength = 256
-
-	// MaxFilterDepth is the maximum recursion depth for filter evaluation.
-	// This prevents stack overflow attacks with deeply nested filter paths.
-	MaxFilterDepth = 10
-
-	// MaxPatternIterations is the maximum complexity for pattern matching operations.
-	// This prevents ReDoS (Regular Expression Denial of Service) attacks with
-	// exponential backtracking patterns. Value of 10000 matches GJSON's default.
-	MaxPatternIterations = 10000
-)
-
 // FilterOp represents a filter comparison operator.
 type FilterOp int
 
@@ -62,14 +47,14 @@ const (
 //   - "name%'*Go*'" → {Path: "name", Op: OpPatternMatch, Value: "*Go*"}
 //   - "status!%'temp*'" → {Path: "status", Op: OpPatternNotMatch, Value: "temp*"}
 //
-// Security: Expressions longer than MaxFilterExpressionLength are rejected.
+// Security: Expressions longer than MaxFilterExpressionLength abort the query with a *LimitError.
 // Security: Null bytes and operator characters in paths are rejected.
 //
 // DEPRECATED: This function supports legacy bracket syntax. Use parseFilterCondition instead.
 func parseFilter(expr string) (*Filter, error) {
 	// Security check: limit filter expression length
 	if len(expr) > MaxFilterExpressionLength {
-		return nil, ErrInvalidPath
+		exceedLimit("MaxFilterExpressionLength", len(expr), MaxFilterExpressionLength)
 	}
 
 	// Security check: reject null bytes in expression
@@ -100,12 +85,12 @@ func parseFilter(expr string) (*Filter, error) {
 //   - "name%'*Go*'" → {Path: "name", Op: OpPatternMatch, Value: "*Go*"}
 //   - "status!%'temp*'" → {Path: "status", Op: OpPatternNotMatch, Value: "temp*"}
 //
-// Security: Expressions longer than MaxFilterExpressionLength are rejected.
+// Security: Expressions longer than MaxFilterExpressionLength abort the query with a *LimitError.
 // Security: Null bytes and operator characters in paths are rejected.
 func parseFilterCondition(expr string) (*Filter, error) {
 	// Security check: limit filter expression length
 	if len(expr) > MaxFilterExpressionLength {
-		return nil, ErrInvalidPath
+		exceedLimit("MaxFilterExpressionLength", len(expr), MaxFilterExpressionLength)
 	}
 
 	// Security check: reject null bytes in expression
@@ -220,10 +205,19 @@ func parseFilterCondition(expr string) (*Filter, error) {
 		return nil, ErrInvalidPath
 	}
 
-	// Remove quotes from string values
-	if (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) ||
-		(strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) {
+	// Remove quotes from string values. A quoted value must end with an unescaped
+	// closing quote; a lone or escaped closing quote leaves it unterminated.
+	if value[0] == '\'' || value[0] == '"' {
+		if len(value) < 2 || value[len(value)-1] != value[0] || isEscapedAt(value, len(value)-1) {
+			return nil, ErrInvalidPath
+		}
 		value = value[1 : len(value)-1]
+	}
+
+	// Backslash escapes are kept for pattern operators, whose matcher interprets
+	// them (\*, \?, \\), and resolved for all other operators
+	if op != OpPatternMatch && op != OpPatternNotMatch {
+		value = unescapeFilterValue(value)
 	}
 
 	// Security check: validate value doesn't contain control characters AFTER quote removal
@@ -238,16 +232,11 @@ func parseFilterCondition(expr string) (*Filter, error) {
 	}, nil
 }
 
-// evaluateFilterWithDepth evaluates a filter with recursion depth tracking.
+// evaluateFilter evaluates a filter against an element's content and attributes.
 // Optimized: Fast paths for common filter patterns to avoid parsing overhead.
-func evaluateFilterWithDepth(filter *Filter, content string, attrs map[string]string, depth int) bool {
+func evaluateFilter(filter *Filter, content string, attrs map[string]string) bool {
 	if filter == nil {
 		return true
-	}
-
-	// Security check: enforce maximum filter recursion depth
-	if depth >= MaxFilterDepth {
-		return false
 	}
 
 	// Get the value to compare
@@ -261,7 +250,6 @@ func evaluateFilterWithDepth(filter *Filter, content string, attrs map[string]st
 	} else {
 		// Element filter - extract text from specific child element
 		parser := newXMLParser([]byte(content))
-		parser.filterDepth = depth + 1
 		result := executeQuery(parser, parsePath(filter.Path), 0)
 		exists = result.Exists()
 		actualValue = result.String()
@@ -336,15 +324,16 @@ func evaluateFilterWithDepth(filter *Filter, content string, attrs map[string]st
 			return !matched
 		}
 
-		// Use internal pattern matcher with complexity limiting for DoS protection
-		matched, stopped := pattern.Match(actualValue, patternStr, MaxPatternIterations)
+		// Use internal pattern matcher with complexity limiting for DoS protection.
+		// The budget includes one step per character of the value, so matches that
+		// take linear time complete for any value within the size limits.
+		budget := MaxPatternIterations + len(actualValue)
+		matched, stopped := pattern.Match(actualValue, patternStr, budget)
 
-		// Security: If complexity limit exceeded, treat as no match.
-		// Returning false (instead of an error) is intentional - this prevents
-		// attackers from using pathological patterns to cause DoS by triggering
-		// expensive error handling. The pattern simply doesn't match.
+		// Security: If the complexity limit is exceeded the match result is
+		// undetermined, so abort the query rather than guess.
 		if stopped {
-			return false
+			exceedLimit("MaxPatternIterations", budget+1, budget)
 		}
 
 		if filter.Op == OpPatternMatch {
@@ -358,7 +347,7 @@ func evaluateFilterWithDepth(filter *Filter, content string, attrs map[string]st
 
 // evaluateFilterOnMatch evaluates a filter against an elementMatch.
 func evaluateFilterOnMatch(filter *Filter, match elementMatch) bool {
-	return evaluateFilterWithDepth(filter, match.content, match.attrs, 0)
+	return evaluateFilter(filter, match.content, match.attrs)
 }
 
 // isNumericValue checks if a string contains a valid numeric value (int or float).
@@ -390,4 +379,31 @@ func isNumericValue(s string) bool {
 		}
 	}
 	return hasDigit
+}
+
+// isEscapedAt reports whether the byte at index i of s is preceded by an odd
+// number of backslashes.
+func isEscapedAt(s string, i int) bool {
+	n := 0
+	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 == 1
+}
+
+// unescapeFilterValue resolves backslash escapes in a filter value: "\x" becomes "x".
+// A trailing backslash is kept.
+func unescapeFilterValue(value string) string {
+	if !strings.Contains(value, "\\") {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	for i := 0; i < len(value); i++ {
+		if value[i] == '\\' && i+1 < len(value) {
+			i++
+		}
+		b.WriteByte(value[i])
+	}
+	return b.String()
 }

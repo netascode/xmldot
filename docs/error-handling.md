@@ -12,7 +12,7 @@ This guide covers error handling in XMLDOT, including error types, error detecti
 
 ## Error Types
 
-XMLDOT defines three sentinel error types that can be checked using `errors.Is()`:
+XMLDOT defines four sentinel error types that can be checked using `errors.Is()`:
 
 ### ErrMalformedXML
 
@@ -22,7 +22,6 @@ Returned when XML input is not well-formed.
 - Unclosed tags: `<root><item>`
 - Mismatched tags: `<root><item>value</wrong></root>`
 - Invalid XML structure: `<<<>>>`
-- Document exceeds `MaxDocumentSize` (10MB)
 - Empty documents
 
 **Example:**
@@ -69,6 +68,27 @@ if errors.Is(err, ErrInvalidValue) {
 }
 ```
 
+### ErrLimitExceeded
+
+Wrapped by every `*LimitError`, which is returned when an operation exceeds one of the
+security limits (see [Security Limits Reference](security.md#security-limits-reference)).
+Operations fail instead of returning partial or truncated results.
+
+**Common causes:**
+- Document exceeds `MaxDocumentSize`
+- More siblings than `MaxArrayResults` in a count, index, filter or field extraction
+- Recursive `**` queries exceeding `MaxWildcardResults` or the operation budget
+- Elements nested deeper than `MaxNestingDepth`
+
+**Example:**
+```go
+_, err := Set(hugeXML, "root.item", "value")
+var limitErr *LimitError
+if errors.As(err, &limitErr) {
+    fmt.Printf("%s exceeded: %d > %d\n", limitErr.Limit, limitErr.Value, limitErr.Max)
+}
+```
+
 ## Error Detection
 
 ### Set and Delete Operations Return Errors
@@ -86,15 +106,25 @@ if err != nil {
 // Use result...
 ```
 
-### Get Operations Never Return Errors
+### Get Operations Report Errors in Result.Err
 
 `Get` operations return a `Result` instead of an error. Check `Exists()` to determine if the path was found:
 
 ```go
 result := Get(xml, "root.item")
 if !result.Exists() {
-    // Path not found or XML is malformed
+    // Path not found, XML is malformed, or a limit was exceeded
     fmt.Println("Path not found")
+}
+```
+
+When a query could not be completed because a security limit was exceeded, the Null
+result carries the error in `Result.Err`, so it can be told apart from a missing path:
+
+```go
+result := Get(xml, "root.items.item.#")
+if result.Err != nil {
+    return result.Err // errors.Is(result.Err, ErrLimitExceeded) == true
 }
 ```
 
@@ -466,22 +496,21 @@ All operations handle:
 
 Error handling includes security protections:
 
-1. **Document Size Limits**: Documents >10MB return `ErrMalformedXML`
-2. **Nesting Depth Limits**: Depth >100 levels is truncated/rejected
-3. **SetRaw Validation**: Rejects DOCTYPE, ENTITY, nested CDATA
-4. **No XXE Attacks**: External entities never processed
-5. **No Code Injection**: All values are properly escaped
+1. **Security Limits**: Exceeding any limit returns a `*LimitError` (`Result.Err` for Get)
+2. **SetRaw Validation**: Rejects DOCTYPE, ENTITY, nested CDATA
+3. **No XXE Attacks**: External entities never processed
+4. **No Code Injection**: All values are properly escaped
 
 When security limits are exceeded:
 ```go
 // Document too large
-largeXML := strings.Repeat("<item>x</item>", 1000000)
 _, err := xmldot.Set(largeXML, "root.new", "value")
-// Returns ErrMalformedXML
+// errors.Is(err, xmldot.ErrLimitExceeded) == true
 
 // Validation provides detailed error
-err := xmldot.ValidateWithError(largeXML)
-// err.Message contains "maximum size" information
+verr := xmldot.ValidateWithError(largeXML)
+// verr.Message contains "maximum size" information, and
+// errors.Is(verr, xmldot.ErrLimitExceeded) == true
 ```
 
 ## Summary
@@ -489,7 +518,7 @@ err := xmldot.ValidateWithError(largeXML)
 ### Key Points
 
 1. **Set/Delete return errors** - always check them
-2. **Get never returns errors** - check `Result.Exists()` instead
+2. **Get reports errors in the Result** - check `Result.Exists()`, and `Result.Err` when a limit may be hit
 3. **Errors return original XML** - unchanged on failure
 4. **Use errors.Is()** - for type checking
 5. **Validate early** - before expensive operations
@@ -500,8 +529,8 @@ err := xmldot.ValidateWithError(largeXML)
 
 | Operation | Returns Error | Original XML on Error | Notes |
 |-----------|---------------|----------------------|-------|
-| `Get()` | No | N/A | Returns empty `Result` on error |
-| `Set()` | Yes | Yes | `ErrMalformedXML`, `ErrInvalidPath` |
+| `Get()` | In `Result.Err` | N/A | Null `Result`; `Result.Err` holds a `*LimitError` if a limit was exceeded |
+| `Set()` | Yes | Yes | `ErrMalformedXML`, `ErrInvalidPath`, `*LimitError` |
 | `Delete()` | Yes | Yes | Non-existent paths don't error |
 | `SetMany()` | Yes | Yes | All-or-nothing |
 | `DeleteMany()` | Yes | Yes | Non-existent paths skipped |

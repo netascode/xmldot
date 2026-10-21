@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: Security limits fail instead of truncating**: Exceeding any security limit now fails the operation instead of returning a partial, truncated or empty result that is indistinguishable from a missing element.
+  - `Get` and related functions return a Null `Result` with the new `Result.Err` field set to a `*LimitError`. `Result.Get`, `GetWithOptions` and `GetMany` propagate the error. `Result.Err` is excluded from JSON encoding.
+  - `Set`, `Delete` and related functions return a `*LimitError` instead of `ErrMalformedXML`, `ErrInvalidValue` or `ErrInvalidPath` (for example for paths longer than `MaxPathSegments`), including when validation fails because of a limit.
+  - `Set` now also checks the resulting document against all limits (size, nesting depth, attributes, token size), so it never produces a document that later operations reject. This adds a validation pass to every `Set`.
+  - `Result.Map()` and `MapWithOptions()` return `nil` instead of an incomplete map, and also when called on a failed `Result`.
+  - `ValidateError` has a new `Err` field and `Unwrap()` method, so `errors.Is(err, ErrLimitExceeded)` reports limit violations found during validation. Malformed input is still reported as malformed, also beyond `MaxAttributes`.
+  - New `ErrLimitExceeded` sentinel and `LimitError` type reporting the limit name, the value observed when the check failed and the effective maximum.
+  - `MaxNestingDepth` is now enforced by all queries, not only by recursive `**` searches and validation, so Get, Set and validation apply the same depth limit.
+  - Query paths with namespace prefixes longer than `MaxNamespacePrefixLength` fail with a `*LimitError`. Element names in documents with such prefixes are still matched as unprefixed names.
+- **BREAKING: Security limits are variables**: All `Max*` limits except `MaxPositionOffset` are now `int` package variables in `limits.go` instead of untyped constants, so applications processing trusted documents can adjust them during initialization. Code using them as constants or as other integer types must be updated, for example `io.LimitReader(r, int64(xmldot.MaxDocumentSize))`. Cached path parses are invalidated when path-related limits change.
+- **Security limit defaults revised**: Limits that only capped input already bounded by the document size were raised; limits that guard against superlinear work were kept or made proportional to the input.
+  - `MaxDocumentSize`: 10 MB → 100 MB
+  - `MaxValueSize`: 5 MB → 100 MB
+  - `MaxAttributes`: 100 → 1000
+  - `MaxFilterExpressionLength`: 256 → 4096
+  - `MaxWildcardResults`: 1000 → 100,000
+  - `MaxRecursiveOperations` is now the minimum budget shared by all `**` segments of a query; the effective budget is the larger of this value and the document size in bytes. Previously each recursive search silently stopped after about 10,000 elements, while chained searches each got a new budget.
+  - `MaxPatternIterations`: 10,000 → 10,000,000, plus one step per byte of the matched value.
+  - New `MaxArrayResults` (100,000) for non-recursive array operations. Indexed access (`.N`) and first-match filters (`#(...)`) only collect siblings up to the answer, and all-match filters (`#(...)#`) count only matching siblings.
+- **Linear-space pattern matching**: The `%` and `!%` filter operators use a greedy glob matcher with O(len(value) + len(pattern)) memory and an immediate match for a trailing `*`. The previous implementation allocated a len(value) × len(pattern) table before applying its iteration limit. Match results are unchanged.
+- **`MaxTokenSize` counting aligned with validation**: Processing instructions and closing tags are counted from after `<?` and `</`, as the validator does.
+
+### Removed
+
+- **BREAKING: `MaxFilterDepth`**: Filters cannot be nested, so filter evaluation never recursed and the limit had no effect. Code referencing it must drop the reference.
+
+### Fixed
+
+- **Markup inside comments and CDATA sections**: Element content is now scanned with comments and CDATA sections copied verbatim. Previously, tag-like text inside them was parsed as elements, which could rewrite the content, end an element early (for example `<![CDATA[</a>]]>`), or trip `MaxNestingDepth` and `MaxTokenSize` on valid documents.
+- **Filters containing dots**: Dots inside `#(...)` were split as path separators, so filters with a nested condition path (`#(specs.cpu==M4)`), a decimal value (`#(price==19.99)`) or a quoted value containing a dot never matched. Backslash escapes inside filters are now resolved by the filter parser: `%` and `!%` patterns keep `\*`, `\?` and `\\` as literal-character escapes, and an escaped closing quote no longer terminates a quoted value.
+- **Panic on filters with a lone quote value**: Paths such as `#(name%")` or `#(name==')` panicked with a slice bounds error in `Get`, `GetWithOptions` and `Set`. Such filters are now rejected as invalid paths.
+- **Non-recursive array operations no longer truncate at 1000 elements**: Counts (`#`), indexed access (`.N`), field extraction (`#.field`), filters (`#(...)#`), single-level wildcards (`*`), multi-root fragments and `Map()` silently dropped every sibling past the 1000th. These operations now use the new `MaxArrayResults` limit.
+
 ## [0.5.1] - 2025-12-18
 
 ### Fixed

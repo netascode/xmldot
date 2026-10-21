@@ -72,7 +72,7 @@ ci: fmt vet lint test check-license ## Run all CI checks
 
 tools: ## Install development tools
 	@echo "Installing development tools..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.5.0
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
 	go install github.com/google/addlicense@v1.1.1
 	go install golang.org/x/perf/cmd/benchstat@latest
 

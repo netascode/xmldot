@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -417,6 +418,9 @@ func TestSet_NilValue(t *testing.T) {
 
 // Test error cases
 func TestSet_Errors(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	tests := []struct {
 		name    string
 		xml     string
@@ -436,7 +440,7 @@ func TestSet_Errors(t *testing.T) {
 			xml:     string(make([]byte, MaxDocumentSize+1)),
 			path:    "root.test",
 			value:   "test",
-			wantErr: ErrMalformedXML,
+			wantErr: ErrLimitExceeded,
 		},
 	}
 
@@ -446,7 +450,7 @@ func TestSet_Errors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Set() expected error, got nil")
 			}
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Set() error = %v, want %v", err, tt.wantErr)
 			}
 		})
@@ -1093,6 +1097,9 @@ func TestDeleteMany_InvalidPath(t *testing.T) {
 
 // Test DeleteMany - Error case: document too large
 func TestDeleteMany_DocumentTooLarge(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	xml := string(make([]byte, MaxDocumentSize+1))
 
 	_, err := DeleteMany(xml, "root.a")
@@ -1695,6 +1702,8 @@ func TestBatchOps_ComplexFilterWildcardCombinations(t *testing.T) {
 
 // TestSetMany_MaxDocumentSize tests that SetMany respects MaxDocumentSize limit
 func TestSetMany_MaxDocumentSize(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	t.Run("SetMany rejects document exceeding MaxDocumentSize", func(t *testing.T) {
 		// Create XML document larger than MaxDocumentSize (10MB)
 		largeXML := string(make([]byte, MaxDocumentSize+1))
@@ -1706,8 +1715,8 @@ func TestSetMany_MaxDocumentSize(t *testing.T) {
 			t.Fatalf("SetMany() should reject documents exceeding MaxDocumentSize")
 		}
 
-		if err != ErrMalformedXML {
-			t.Errorf("SetMany() error = %v, want ErrMalformedXML", err)
+		if !errors.Is(err, ErrLimitExceeded) {
+			t.Errorf("SetMany() error = %v, want ErrLimitExceeded", err)
 		}
 	})
 
@@ -1743,6 +1752,8 @@ func TestSetMany_MaxDocumentSize(t *testing.T) {
 
 // TestSetManyBytes_MaxDocumentSize tests that SetManyBytes respects MaxDocumentSize
 func TestSetManyBytes_MaxDocumentSize(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	t.Run("SetManyBytes rejects document exceeding MaxDocumentSize", func(t *testing.T) {
 		largeXML := make([]byte, MaxDocumentSize+1)
 		paths := []string{"root.test"}
@@ -1753,14 +1764,16 @@ func TestSetManyBytes_MaxDocumentSize(t *testing.T) {
 			t.Fatalf("SetManyBytes() should reject documents exceeding MaxDocumentSize")
 		}
 
-		if err != ErrMalformedXML {
-			t.Errorf("SetManyBytes() error = %v, want ErrMalformedXML", err)
+		if !errors.Is(err, ErrLimitExceeded) {
+			t.Errorf("SetManyBytes() error = %v, want ErrLimitExceeded", err)
 		}
 	})
 }
 
 // TestDeleteMany_MaxDocumentSize tests that DeleteMany respects MaxDocumentSize limit
 func TestDeleteMany_MaxDocumentSize(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	t.Run("DeleteMany rejects document exceeding MaxDocumentSize", func(t *testing.T) {
 		// Create XML document larger than MaxDocumentSize (10MB)
 		largeXML := string(make([]byte, MaxDocumentSize+1))
@@ -1770,8 +1783,8 @@ func TestDeleteMany_MaxDocumentSize(t *testing.T) {
 			t.Fatalf("DeleteMany() should reject documents exceeding MaxDocumentSize")
 		}
 
-		if err != ErrMalformedXML {
-			t.Errorf("DeleteMany() error = %v, want ErrMalformedXML", err)
+		if !errors.Is(err, ErrLimitExceeded) {
+			t.Errorf("DeleteMany() error = %v, want ErrLimitExceeded", err)
 		}
 	})
 
@@ -1801,6 +1814,8 @@ func TestDeleteMany_MaxDocumentSize(t *testing.T) {
 
 // TestDeleteManyBytes_MaxDocumentSize tests that DeleteManyBytes respects MaxDocumentSize
 func TestDeleteManyBytes_MaxDocumentSize(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	t.Run("DeleteManyBytes rejects document exceeding MaxDocumentSize", func(t *testing.T) {
 		largeXML := make([]byte, MaxDocumentSize+1)
 
@@ -1809,8 +1824,8 @@ func TestDeleteManyBytes_MaxDocumentSize(t *testing.T) {
 			t.Fatalf("DeleteManyBytes() should reject documents exceeding MaxDocumentSize")
 		}
 
-		if err != ErrMalformedXML {
-			t.Errorf("DeleteManyBytes() error = %v, want ErrMalformedXML", err)
+		if !errors.Is(err, ErrLimitExceeded) {
+			t.Errorf("DeleteManyBytes() error = %v, want ErrLimitExceeded", err)
 		}
 	})
 }

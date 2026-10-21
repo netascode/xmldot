@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -145,6 +146,8 @@ func TestEdgeBoundaries_NullBytes(t *testing.T) {
 
 // TestEdgeBoundaries_MaxSizes tests enforcement of maximum size limits
 func TestEdgeBoundaries_MaxSizes(t *testing.T) {
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	tests := []struct {
 		name       string
 		limit      int
@@ -304,7 +307,7 @@ func TestEdgeBoundaries_MaxAttributes(t *testing.T) {
 		{
 			name:       "Over attribute limit",
 			attrCount:  MaxAttributes + 50,
-			shouldWork: false, // Excess attributes ignored
+			shouldWork: false, // Query fails with a limit error
 		},
 	}
 
@@ -314,7 +317,7 @@ func TestEdgeBoundaries_MaxAttributes(t *testing.T) {
 			var sb strings.Builder
 			sb.WriteString("<root><item ")
 			for i := 0; i < tt.attrCount; i++ {
-				sb.WriteString(fmt.Sprintf("attr%d=\"val%d\" ", i, i))
+				fmt.Fprintf(&sb, "attr%d=\"val%d\" ", i, i)
 			}
 			sb.WriteString(">content</item></root>")
 			xml := sb.String()
@@ -328,6 +331,10 @@ func TestEdgeBoundaries_MaxAttributes(t *testing.T) {
 
 			// Test accessing first attribute
 			result := Get(xml, "root.item.@attr0")
+			if !tt.shouldWork {
+				requireLimitError(t, result.Err, "MaxAttributes")
+				return
+			}
 			if !result.Exists() {
 				t.Errorf("Expected first attribute to be accessible")
 			}
@@ -526,6 +533,8 @@ func TestEdgeBoundaries_PathBoundaries(t *testing.T) {
 
 // TestEdgeBoundaries_ValueSizeLimits tests Set value size limits
 func TestEdgeBoundaries_ValueSizeLimits(t *testing.T) {
+	defer withLimit(&MaxValueSize, 5*1024*1024)()
+
 	xml := "<root><item>old</item></root>"
 
 	tests := []struct {
@@ -587,10 +596,7 @@ func TestEdgeBoundaries_ValueSizeLimits(t *testing.T) {
 					}
 				}
 			} else {
-				// Over limit values may fail or be truncated
-				if err == nil {
-					t.Logf("Large value (%d bytes) unexpectedly succeeded", tt.valueSize)
-				}
+				requireLimitError(t, err, "MaxValueSize")
 			}
 		})
 	}
@@ -656,6 +662,8 @@ func TestEdgeBoundaries_SpecialNumbers(t *testing.T) {
 
 // TestEdgeBoundaries_WildcardResultLimit tests wildcard result limits
 func TestEdgeBoundaries_WildcardResultLimit(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	tests := []struct {
 		name         string
 		elementCount int
@@ -668,12 +676,12 @@ func TestEdgeBoundaries_WildcardResultLimit(t *testing.T) {
 		},
 		{
 			name:         "At limit",
-			elementCount: MaxWildcardResults,
+			elementCount: MaxArrayResults,
 			expectLimit:  false,
 		},
 		{
 			name:         "Over limit",
-			elementCount: MaxWildcardResults + 500,
+			elementCount: MaxArrayResults + 500,
 			expectLimit:  true,
 		},
 	}
@@ -684,7 +692,7 @@ func TestEdgeBoundaries_WildcardResultLimit(t *testing.T) {
 			var sb strings.Builder
 			sb.WriteString("<root>")
 			for i := 0; i < tt.elementCount; i++ {
-				sb.WriteString(fmt.Sprintf("<item>value%d</item>", i))
+				fmt.Fprintf(&sb, "<item>value%d</item>", i)
 			}
 			sb.WriteString("</root>")
 			xml := sb.String()
@@ -694,9 +702,10 @@ func TestEdgeBoundaries_WildcardResultLimit(t *testing.T) {
 			count := countResult.Int()
 
 			if tt.expectLimit {
-				if count > int64(MaxWildcardResults) {
-					t.Errorf("Count exceeded MaxWildcardResults: got %d, limit %d", count, MaxWildcardResults)
+				if count > int64(MaxArrayResults) {
+					t.Errorf("Count exceeded MaxArrayResults: got %d, limit %d", count, MaxArrayResults)
 				}
+				requireLimitError(t, countResult.Err, "MaxArrayResults")
 			} else {
 				if count != int64(tt.elementCount) {
 					t.Errorf("Count mismatch: got %d, want %d", count, tt.elementCount)
@@ -716,13 +725,13 @@ func TestEdgeBoundaries_RecursiveOperationLimit(t *testing.T) {
 
 	for d := range depth {
 		for range elementsPerLevel {
-			sb.WriteString(fmt.Sprintf("<level%d>", d))
+			fmt.Fprintf(&sb, "<level%d>", d)
 		}
 	}
 	sb.WriteString("<target>value</target>")
 	for d := depth - 1; d >= 0; d-- {
 		for range elementsPerLevel {
-			sb.WriteString(fmt.Sprintf("</level%d>", d))
+			fmt.Fprintf(&sb, "</level%d>", d)
 		}
 	}
 	sb.WriteString("</root>")
@@ -1403,6 +1412,9 @@ func TestEdgeErrors_PartiallyValidXML(t *testing.T) {
 
 // TestEdgeLarge_Documents tests handling of large XML documents
 func TestEdgeLarge_Documents(t *testing.T) {
+	// All cases are sized against a 10MB limit
+	defer withLimit(&MaxDocumentSize, 10*1024*1024)()
+
 	tests := []struct {
 		name         string
 		sizeElements int
@@ -1453,7 +1465,7 @@ func TestEdgeLarge_Documents(t *testing.T) {
 			var sb strings.Builder
 			sb.WriteString("<root>")
 			for i := 0; i < tt.sizeElements; i++ {
-				sb.WriteString(fmt.Sprintf("<item id=\"%d\">", i))
+				fmt.Fprintf(&sb, "<item id=\"%d\">", i)
 				// Fill with data to reach elementSize
 				dataSize := tt.elementSize - 40 // Account for tags
 				if dataSize > 0 {
@@ -1467,10 +1479,11 @@ func TestEdgeLarge_Documents(t *testing.T) {
 			// Test Get operation
 			result := Get(xml, "root.item")
 			if tt.shouldFail {
-				// Should return empty result due to size limit
+				// Should fail with a size limit error
 				if result.Exists() {
 					t.Errorf("Expected document to be rejected, but got result")
 				}
+				requireLimitError(t, result.Err, "MaxDocumentSize")
 			} else {
 				// Should successfully parse
 				if !result.Exists() {
@@ -1508,8 +1521,8 @@ func TestEdgeLarge_Documents(t *testing.T) {
 func TestEdgeLarge_DeepNesting(t *testing.T) {
 	tests := []struct {
 		name         string
-		depth        int
-		expectAccess bool // Whether we expect to access the deepest element
+		depth        int  // Levels below <root>, so the document depth is depth+1
+		expectAccess bool // Whether the document is within MaxNestingDepth
 	}{
 		{
 			name:         "Shallow nesting (10 levels)",
@@ -1522,19 +1535,24 @@ func TestEdgeLarge_DeepNesting(t *testing.T) {
 			expectAccess: true,
 		},
 		{
-			name:         "Deep nesting (100 levels - at limit)",
+			name:         "Deep nesting (at limit)",
+			depth:        MaxNestingDepth - 1,
+			expectAccess: true,
+		},
+		{
+			name:         "Deep nesting (one over limit)",
 			depth:        MaxNestingDepth,
-			expectAccess: false, // Limit will truncate content
+			expectAccess: false, // Queries fail with a limit error
 		},
 		{
 			name:         "Excessive nesting (200 levels)",
 			depth:        200,
-			expectAccess: false, // Should be truncated
+			expectAccess: false, // Queries fail with a limit error
 		},
 		{
 			name:         "Extreme nesting (500 levels)",
 			depth:        500,
-			expectAccess: false, // Should be truncated
+			expectAccess: false, // Queries fail with a limit error
 		},
 	}
 
@@ -1544,11 +1562,11 @@ func TestEdgeLarge_DeepNesting(t *testing.T) {
 			var sb strings.Builder
 			sb.WriteString("<root>")
 			for i := 0; i < tt.depth; i++ {
-				sb.WriteString(fmt.Sprintf("<level%d>", i))
+				fmt.Fprintf(&sb, "<level%d>", i)
 			}
 			sb.WriteString("deepvalue")
 			for i := tt.depth - 1; i >= 0; i-- {
-				sb.WriteString(fmt.Sprintf("</level%d>", i))
+				fmt.Fprintf(&sb, "</level%d>", i)
 			}
 			sb.WriteString("</root>")
 			xml := sb.String()
@@ -1564,18 +1582,26 @@ func TestEdgeLarge_DeepNesting(t *testing.T) {
 			var pathBuilder strings.Builder
 			pathBuilder.WriteString("root")
 			for i := 0; i < tt.depth; i++ {
-				pathBuilder.WriteString(fmt.Sprintf(".level%d", i))
+				fmt.Fprintf(&pathBuilder, ".level%d", i)
 			}
 			path := pathBuilder.String()
 
 			// Test Get operation
 			result := Get(xml, path)
-			if tt.expectAccess {
-				if result.String() != "deepvalue" {
-					t.Errorf("Expected to access deep value, got: %s", result.String())
+			if !tt.expectAccess {
+				// Over the limit, every query and Set fails instead of truncating.
+				// The full path may also exceed MaxPathSegments.
+				if !errors.Is(result.Err, ErrLimitExceeded) {
+					t.Errorf("Expected limit error for deepest path, got %v", result.Err)
 				}
+				requireLimitError(t, Get(xml, "root.level0").Err, "MaxNestingDepth")
+				_, err := Set(xml, "root.level0.newitem", "inserted")
+				requireLimitError(t, err, "MaxNestingDepth")
+				return
 			}
-			// If not expectAccess, we just verify no panic occurred
+			if result.String() != "deepvalue" {
+				t.Errorf("Expected to access deep value, got: %s", result.String())
+			}
 
 			// Test that we can access intermediate levels
 			intermediateDepth := min(10, tt.depth-1)
@@ -1583,7 +1609,7 @@ func TestEdgeLarge_DeepNesting(t *testing.T) {
 				var intermediatePath strings.Builder
 				intermediatePath.WriteString("root")
 				for i := 0; i < intermediateDepth; i++ {
-					intermediatePath.WriteString(fmt.Sprintf(".level%d", i))
+					fmt.Fprintf(&intermediatePath, ".level%d", i)
 				}
 				intermediateResult := Get(xml, intermediatePath.String())
 				if !intermediateResult.Exists() {
@@ -1591,19 +1617,13 @@ func TestEdgeLarge_DeepNesting(t *testing.T) {
 				}
 			}
 
-			// Test Set at intermediate depth (only for reasonable depths)
-			if tt.depth <= MaxNestingDepth && tt.depth > 1 {
-				// Skip Set test at exactly MaxNestingDepth - known builder limitation
-				if tt.depth == MaxNestingDepth {
-					t.Skip("Set operation at MaxNestingDepth (100 levels) not fully implemented - builder validation issue")
-					return
-				}
-
+			// Test Set at intermediate depth
+			if tt.depth > 1 {
 				setDepth := min(20, tt.depth-1)
 				var setPath strings.Builder
 				setPath.WriteString("root")
 				for i := 0; i < setDepth; i++ {
-					setPath.WriteString(fmt.Sprintf(".level%d", i))
+					fmt.Fprintf(&setPath, ".level%d", i)
 				}
 				setPath.WriteString(".newitem")
 
@@ -1740,11 +1760,11 @@ func TestEdgeLarge_LongPaths(t *testing.T) {
 			var xmlBuilder strings.Builder
 			xmlBuilder.WriteString("<root>")
 			for i := 0; i < tt.pathLength; i++ {
-				xmlBuilder.WriteString(fmt.Sprintf("<seg%d>", i))
+				fmt.Fprintf(&xmlBuilder, "<seg%d>", i)
 			}
 			xmlBuilder.WriteString("value")
 			for i := tt.pathLength - 1; i >= 0; i-- {
-				xmlBuilder.WriteString(fmt.Sprintf("</seg%d>", i))
+				fmt.Fprintf(&xmlBuilder, "</seg%d>", i)
 			}
 			xmlBuilder.WriteString("</root>")
 			xml := xmlBuilder.String()
@@ -1753,7 +1773,7 @@ func TestEdgeLarge_LongPaths(t *testing.T) {
 			var pathBuilder strings.Builder
 			pathBuilder.WriteString("root")
 			for i := 0; i < tt.pathLength; i++ {
-				pathBuilder.WriteString(fmt.Sprintf(".seg%d", i))
+				fmt.Fprintf(&pathBuilder, ".seg%d", i)
 			}
 			path := pathBuilder.String()
 
@@ -1797,13 +1817,13 @@ func TestEdgeLarge_ManyElements(t *testing.T) {
 			testPath: true,
 		},
 		{
-			name:     "At wildcard limit (1000)",
-			count:    MaxWildcardResults,
+			name:     "Many elements (2000)",
+			count:    2000,
 			testPath: true,
 		},
 		{
-			name:     "Over wildcard limit (2000)",
-			count:    MaxWildcardResults * 2,
+			name:     "Over array limit",
+			count:    MaxArrayResults + 500,
 			testPath: false, // Won't collect all with wildcards
 		},
 	}
@@ -1814,7 +1834,7 @@ func TestEdgeLarge_ManyElements(t *testing.T) {
 			var sb strings.Builder
 			sb.WriteString("<root>")
 			for i := 0; i < tt.count; i++ {
-				sb.WriteString(fmt.Sprintf("<item id=\"%d\">value%d</item>", i, i))
+				fmt.Fprintf(&sb, "<item id=\"%d\">value%d</item>", i, i)
 			}
 			sb.WriteString("</root>")
 			xml := sb.String()
@@ -1827,9 +1847,17 @@ func TestEdgeLarge_ManyElements(t *testing.T) {
 
 			// Test counting elements
 			countResult := Get(xml, "root.item.#")
-			expectedCount := min(tt.count, MaxWildcardResults)
-			if countResult.Int() != int64(expectedCount) {
-				t.Errorf("Expected count %d, got %d", expectedCount, countResult.Int())
+			if tt.count > MaxArrayResults {
+				requireLimitError(t, countResult.Err, "MaxArrayResults")
+				// Indexed access only collects siblings up to the index
+				if !Get(xml, "root.item.5").Exists() {
+					t.Errorf("Expected to access element at index 5")
+				}
+				requireLimitError(t, Get(xml, fmt.Sprintf("root.item.%d", MaxArrayResults)).Err, "MaxArrayResults")
+				return
+			}
+			if countResult.Int() != int64(tt.count) {
+				t.Errorf("Expected count %d, got %d", tt.count, countResult.Int())
 			}
 
 			// Test wildcard access

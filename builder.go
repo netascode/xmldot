@@ -91,13 +91,13 @@ func (b *xmlBuilder) setElement(path []PathSegment, value interface{}) error {
 	}
 
 	// Security check: reject values that are too large
-	if len(xmlValue) > MaxValueSize {
-		return fmt.Errorf("%w: value exceeds maximum size of %d bytes", ErrInvalidValue, MaxValueSize)
+	if err := checkValueSize(len(xmlValue)); err != nil {
+		return err
 	}
 
 	// Security check: reject documents that are too large
-	if len(b.data) > MaxDocumentSize {
-		return ErrMalformedXML
+	if err := checkDocumentSize(len(b.data)); err != nil {
+		return err
 	}
 
 	// Check for append operation (-1 index) and resolve intent
@@ -671,8 +671,8 @@ func (b *xmlBuilder) createElementForAttribute(elementPath []PathSegment, attrSe
 	intermediateXML := b.getResult()
 
 	// Security check: Validate intermediate result size
-	if len(intermediateXML) > MaxDocumentSize {
-		return fmt.Errorf("%w: intermediate result exceeds maximum document size", ErrMalformedXML)
+	if err := checkDocumentSize(len(intermediateXML)); err != nil {
+		return err
 	}
 
 	// Step 3: Reset builder state with new XML
@@ -715,8 +715,8 @@ func (b *xmlBuilder) appendElement(path []PathSegment, value interface{}) error 
 	}
 
 	// Security check
-	if len(xmlValue) > MaxValueSize {
-		return fmt.Errorf("%w: value exceeds maximum size", ErrInvalidValue)
+	if err := checkValueSize(len(xmlValue)); err != nil {
+		return err
 	}
 
 	// Path structure: parent segments + element segment + index segment
@@ -843,11 +843,7 @@ func (b *xmlBuilder) appendElement(path []PathSegment, value interface{}) error 
 	b.result.Write(b.data[insertPos:])
 
 	// Security check: validate final document size doesn't exceed limit
-	if b.result.Len() > MaxDocumentSize {
-		return fmt.Errorf("%w: resulting document exceeds maximum size", ErrInvalidValue)
-	}
-
-	return nil
+	return checkDocumentSize(b.result.Len())
 }
 
 // appendRootElement appends a new root-level element to XML fragments.
@@ -908,11 +904,7 @@ func (b *xmlBuilder) appendRootElement(elementSeg PathSegment, xmlValue string, 
 	b.result.Write(b.data[insertPos:])
 
 	// Security check: validate final document size doesn't exceed limit
-	if b.result.Len() > MaxDocumentSize {
-		return fmt.Errorf("%w: resulting document exceeds maximum size", ErrInvalidValue)
-	}
-
-	return nil
+	return checkDocumentSize(b.result.Len())
 }
 
 // findLastMatchPosition finds the position after the last child element
@@ -1021,8 +1013,8 @@ func (b *xmlBuilder) deleteElement(path []PathSegment) error {
 	}
 
 	// Security check
-	if len(b.data) > MaxDocumentSize {
-		return ErrMalformedXML
+	if err := checkDocumentSize(len(b.data)); err != nil {
+		return err
 	}
 
 	// Check if we're deleting an attribute

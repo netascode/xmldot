@@ -537,7 +537,7 @@ func FuzzPathParser(f *testing.F) {
 		}()
 
 		// Path parsing should never panic
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// If segments were parsed, they should be valid
 		for _, seg := range segments {
@@ -584,6 +584,12 @@ func FuzzPathSplitting(f *testing.F) {
 func FuzzPathWithFilters(f *testing.F) {
 	// Seed with filter patterns
 	f.Add("item[age>21]")
+	f.Add(`#(0%")`)          // regression: lone quote value
+	f.Add(`item.#(c.d==x)#`) // regression: dots inside filters
+	f.Add(`item.#(price==19.99).name`)
+	f.Add(`item.#(name=='It\\'s')`)
+	f.Add(`item.#(name%"a\\*b")#`)
+	f.Add(`#(0==')`)
 	f.Add("item[age<30]")
 	f.Add("item[age==25]")
 	f.Add("item[@id==5]")
@@ -601,7 +607,7 @@ func FuzzPathWithFilters(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// If filter was parsed, it should be valid
 		for _, seg := range segments {
@@ -636,7 +642,7 @@ func FuzzPathWithModifiers(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// If modifiers were parsed, they should be valid
 		for _, seg := range segments {
@@ -669,7 +675,7 @@ func FuzzPathWithArrayAccess(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// If array index was parsed, verify it's valid
 		for _, seg := range segments {
@@ -703,7 +709,7 @@ func FuzzPathWithSpecialOperators(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// Verify operator segments are valid
 		for _, seg := range segments {
@@ -734,7 +740,7 @@ func FuzzPathWithAttributes(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// Verify attribute segments are valid
 		for _, seg := range segments {
@@ -764,13 +770,13 @@ func FuzzPathWithNamespaces(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// Verify namespace segments are valid
 		for _, seg := range segments {
 			if seg.Value != "" {
 				// Split namespace should not panic
-				prefix, local := splitNamespace(seg.Value)
+				prefix, local := splitNamespaceChecked(seg.Value)
 				_ = prefix
 				_ = local
 			}
@@ -795,8 +801,8 @@ func FuzzPathCacheConsistency(f *testing.F) {
 		}()
 
 		// Parse twice - should get same result from cache
-		segments1 := parsePath(path)
-		segments2 := parsePath(path)
+		segments1 := parsePathChecked(path)
+		segments2 := parsePathChecked(path)
 
 		// Verify both results are equivalent (length comparison)
 		if (segments1 == nil) != (segments2 == nil) {
@@ -826,7 +832,7 @@ func FuzzPathSegmentLimit(f *testing.F) {
 			}
 		}()
 
-		segments := parsePath(path)
+		segments := parsePathChecked(path)
 
 		// If segments exceeded limit, should return nil
 		// If within limit, should return valid segments

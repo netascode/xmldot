@@ -10,10 +10,22 @@ type ValidateError struct {
 	Line    int
 	Column  int
 	Message string
+	// Err is the underlying cause, if any. It is a *LimitError when validation
+	// failed because a security limit was exceeded.
+	Err error
 }
 
 func (e *ValidateError) Error() string {
 	return fmt.Sprintf("XML validation error at line %d, column %d: %s", e.Line, e.Column, e.Message)
+}
+
+// Unwrap returns the underlying cause, so that errors.Is(err, ErrLimitExceeded)
+// reports true for validation failures caused by a security limit.
+func (e *ValidateError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // validatingParser extends xmlParser with line/column tracking for validation
@@ -24,6 +36,7 @@ type validatingParser struct {
 	tagStack   []tagInfo // Stack of open tags for nesting validation
 	rootFound  bool      // Track if we've found a root element
 	rootClosed bool      // Track if the root element has been closed
+	limitErr   *LimitError
 }
 
 // tagInfo tracks information about an open tag
@@ -39,7 +52,6 @@ func newValidatingParser(data []byte) *validatingParser {
 		xmlParser: xmlParser{
 			data:    data,
 			pos:     0,
-			depth:   0,
 			dataLen: len(data),
 		},
 		line:     1,
@@ -77,12 +89,22 @@ func (p *validatingParser) peekChar() byte {
 
 // validate performs full document validation
 func (p *validatingParser) validate() *ValidateError {
+	err := p.validateDocument()
+	if err != nil && err.Err == nil && p.limitErr != nil {
+		err.Err = p.limitErr
+	}
+	return err
+}
+
+// validateDocument performs the validation for validate.
+func (p *validatingParser) validateDocument() *ValidateError {
 	// Check document size
-	if p.dataLen > MaxDocumentSize {
+	if limitErr := checkDocumentSize(p.dataLen); limitErr != nil {
 		return &ValidateError{
 			Line:    1,
 			Column:  0,
 			Message: fmt.Sprintf("document exceeds maximum size of %d bytes", MaxDocumentSize),
+			Err:     limitErr,
 		}
 	}
 
@@ -261,6 +283,7 @@ func (p *validatingParser) parseOpeningTag(tagLine, tagColumn int) *ValidateErro
 			Line:    tagLine,
 			Column:  tagColumn,
 			Message: fmt.Sprintf("nesting depth exceeds maximum of %d", MaxNestingDepth),
+			Err:     &LimitError{Limit: "MaxNestingDepth", Value: len(p.tagStack) + 1, Max: MaxNestingDepth},
 		}
 	}
 
@@ -386,15 +409,6 @@ func (p *validatingParser) parseAttributesValidating() *ValidateError {
 			break
 		}
 
-		// Check attribute limit
-		if attrCount >= MaxAttributes {
-			return &ValidateError{
-				Line:    p.line,
-				Column:  p.column,
-				Message: fmt.Sprintf("too many attributes (maximum %d)", MaxAttributes),
-			}
-		}
-
 		// Read attribute name
 		attrLine := p.line
 		attrColumn := p.column
@@ -447,6 +461,17 @@ func (p *validatingParser) parseAttributesValidating() *ValidateError {
 		if err := p.skipUntilTracked(quote); err != nil {
 			return err
 		}
+
+		// Check attribute limit once the attribute is known to be well-formed, so
+		// malformed input is reported as malformed rather than as a limit
+		if attrCount > MaxAttributes {
+			return &ValidateError{
+				Line:    attrLine,
+				Column:  attrColumn,
+				Message: fmt.Sprintf("too many attributes (maximum %d)", MaxAttributes),
+				Err:     &LimitError{Limit: "MaxAttributes", Value: attrCount, Max: MaxAttributes},
+			}
+		}
 	}
 
 	return nil
@@ -459,6 +484,7 @@ func (p *validatingParser) readNameTracked() string {
 	for p.pos < p.dataLen {
 		// Check token size limit
 		if p.pos-start > MaxTokenSize {
+			p.limitErr = &LimitError{Limit: "MaxTokenSize", Value: p.pos - start, Max: MaxTokenSize}
 			return ""
 		}
 
@@ -487,6 +513,7 @@ func (p *validatingParser) skipUntilTracked(delim byte) *ValidateError {
 				Line:    p.line,
 				Column:  p.column,
 				Message: "token exceeds maximum size",
+				Err:     &LimitError{Limit: "MaxTokenSize", Value: p.pos - start, Max: MaxTokenSize},
 			}
 		}
 

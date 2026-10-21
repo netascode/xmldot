@@ -1098,7 +1098,8 @@ func TestFieldExtractionNamespace(t *testing.T) {
 	}
 }
 
-// TestFieldExtractionSecurity tests MaxWildcardResults limit
+// TestFieldExtractionSecurity tests that field extraction is not truncated at
+// MaxWildcardResults, which only applies to recursive wildcard queries
 func TestFieldExtractionSecurity(t *testing.T) {
 	// Create XML with many items
 	xml := `<root><items>`
@@ -1111,9 +1112,8 @@ func TestFieldExtractionSecurity(t *testing.T) {
 	if result.Type != Array {
 		t.Errorf("Expected Array type, got %v", result.Type)
 	}
-	// Should be limited to MaxWildcardResults (1000)
-	if len(result.Results) != MaxWildcardResults {
-		t.Errorf("Expected %d results (limit), got %d", MaxWildcardResults, len(result.Results))
+	if len(result.Results) != 1500 {
+		t.Errorf("Expected 1500 results, got %d", len(result.Results))
 	}
 }
 

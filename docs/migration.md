@@ -368,7 +368,7 @@ for {
 
 **After**:
 ```go
-// Read entire document (for documents <10MB)
+// Read entire document (for documents below MaxDocumentSize)
 xmlData, _ := io.ReadAll(reader)
 
 // Query all items
@@ -382,7 +382,7 @@ items.ForEach(func(i int, item Result) bool {
 })
 ```
 
-**Note**: For files >10MB, continue using encoding/xml's streaming decoder.
+**Note**: For files larger than MaxDocumentSize (100MB by default), continue using encoding/xml's streaming decoder.
 
 #### Recipe 4: Hybrid Approach
 
@@ -909,9 +909,9 @@ fmt.Println(result.String())  // "document.pdf"
 **Problem**:
 ```go
 // User provides large document
-userXML := generateLargeXML(20 * 1024 * 1024)  // 20MB
+userXML := generateLargeXML(200 * 1024 * 1024)  // 200MB
 result := xmldot.Get(userXML, path)
-// Returns Null - exceeds MaxDocumentSize (10MB)
+// Returns Null with result.Err set - exceeds MaxDocumentSize (100MB)
 ```
 
 **Solution**:
@@ -1171,7 +1171,7 @@ XMLDOT provides a simpler, faster alternative to encoding/xml for ad-hoc queryin
 **Keep encoding/xml when:**
 - ✓ Struct type safety is critical
 - ✓ Full namespace support needed
-- ✓ Streaming large files (>10MB)
+- ✓ Streaming large files (larger than MaxDocumentSize)
 - ✓ Complex schema validation required
 
 **Best approach**: Use both libraries for their strengths in a hybrid approach.

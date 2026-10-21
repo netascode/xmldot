@@ -446,8 +446,10 @@ func TestSet_AppendPreservesAttributes(t *testing.T) {
 
 // TestSet_AppendDocumentSizeLimit tests that append respects MaxDocumentSize
 func TestSet_AppendDocumentSizeLimit(t *testing.T) {
-	// Create a document near the size limit
-	largeValue := strings.Repeat("x", MaxDocumentSize-100)
+	defer withLimit(&MaxDocumentSize, 1024*1024)()
+
+	// Create a value that fits on its own but pushes the document over the limit
+	largeValue := strings.Repeat("x", MaxDocumentSize-10)
 	xml := `<root></root>`
 
 	// First append should succeed (document still under limit)
@@ -461,8 +463,8 @@ func TestSet_AppendDocumentSizeLimit(t *testing.T) {
 	if err == nil {
 		t.Error("Append should fail when resulting document exceeds MaxDocumentSize")
 	}
-	if err != nil && !strings.Contains(err.Error(), "exceeds maximum size") {
-		t.Errorf("Expected size limit error, got: %v", err)
+	if err != nil {
+		requireLimitError(t, err, "MaxDocumentSize")
 	}
 }
 

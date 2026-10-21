@@ -17,15 +17,15 @@ import (
 
 // TestResultGet_DeepChainingAttack verifies deep chaining doesn't cause memory/CPU issues
 func TestResultGet_DeepChainingAttack(t *testing.T) {
-	// Generate deeply nested XML (100 levels)
+	// Generate XML nested up to MaxNestingDepth (root + 98 levels + value)
 	var sb strings.Builder
 	sb.WriteString("<root>")
-	for i := 0; i < 100; i++ {
-		sb.WriteString(fmt.Sprintf("<level%d>", i))
+	for i := 0; i < 98; i++ {
+		fmt.Fprintf(&sb, "<level%d>", i)
 	}
 	sb.WriteString("<value>test</value>")
-	for i := 99; i >= 0; i-- {
-		sb.WriteString(fmt.Sprintf("</level%d>", i))
+	for i := 97; i >= 0; i-- {
+		fmt.Fprintf(&sb, "</level%d>", i)
 	}
 	sb.WriteString("</root>")
 	xml := sb.String()
@@ -36,9 +36,9 @@ func TestResultGet_DeepChainingAttack(t *testing.T) {
 		t.Fatal("Root should exist")
 	}
 
-	// Chain 100 times (attempting to exhaust resources)
+	// Chain through every level (attempting to exhaust resources)
 	chainCount := 0
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 98; i++ {
 		if !result.Exists() {
 			break
 		}
@@ -56,6 +56,8 @@ func TestResultGet_DeepChainingAttack(t *testing.T) {
 
 // TestResultGet_ArrayAmplificationAttack tests array handling limits
 func TestResultGet_ArrayAmplificationAttack(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Create XML with 10,000 items (attempts to exceed MaxWildcardResults)
 	var sb strings.Builder
 	sb.WriteString("<root>")
@@ -69,12 +71,11 @@ func TestResultGet_ArrayAmplificationAttack(t *testing.T) {
 	root := Get(xml, "root")
 	items := root.Get("item.#.name")
 
-	// Result should be bounded by MaxWildcardResults (1000)
-	if items.IsArray() && len(items.Results) > MaxWildcardResults {
-		t.Errorf("Array exceeds MaxWildcardResults: got %d, max %d", len(items.Results), MaxWildcardResults)
+	// Result over the limit must fail rather than be truncated
+	if items.Exists() {
+		t.Errorf("Array exceeds MaxArrayResults: got %d, max %d", len(items.Results), MaxArrayResults)
 	}
-
-	t.Logf("Array results properly bounded to %d items", len(items.Results))
+	requireLimitError(t, items.Err, "MaxArrayResults")
 }
 
 // TestResultGet_RecursiveWildcardBomb tests CPU exhaustion protection
@@ -85,7 +86,7 @@ func TestResultGet_RecursiveWildcardBomb(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		sb.WriteString("<level>")
 		for j := 0; j < 10; j++ {
-			sb.WriteString(fmt.Sprintf("<item>value%d</item>", j))
+			fmt.Fprintf(&sb, "<item>value%d</item>", j)
 		}
 	}
 	for i := 0; i < 50; i++ {
@@ -212,6 +213,9 @@ func TestResultGet_PrimitiveTypeSafety(t *testing.T) {
 
 // TestResultGet_DocumentSizeEnforcement tests MaxDocumentSize limit
 func TestResultGet_DocumentSizeEnforcement(t *testing.T) {
+	// Keep documents built from MaxDocumentSize small
+	defer withLimit(&MaxDocumentSize, 1<<20)()
+
 	// Create document near size limit
 	largeContent := strings.Repeat("x", MaxDocumentSize-1000)
 	xml := fmt.Sprintf("<root>%s</root>", largeContent)
@@ -280,11 +284,13 @@ func TestResultGet_ConcurrentSafety(t *testing.T) {
 
 // TestResultGetMany_SecurityLimits tests GetMany respects security limits
 func TestResultGetMany_SecurityLimits(t *testing.T) {
+	defer withLimit(&MaxArrayResults, 1000)()
+
 	// Create XML with large arrays
 	var sb strings.Builder
 	sb.WriteString("<root>")
 	for i := 0; i < 5000; i++ {
-		sb.WriteString(fmt.Sprintf("<item><name>Item%d</name><value>%d</value></item>", i, i))
+		fmt.Fprintf(&sb, "<item><name>Item%d</name><value>%d</value></item>", i, i)
 	}
 	sb.WriteString("</root>")
 	xml := sb.String()
@@ -294,14 +300,13 @@ func TestResultGetMany_SecurityLimits(t *testing.T) {
 	// Query multiple arrays via GetMany
 	results := root.GetMany("item.#.name", "item.#.value", "item.#.@id")
 
-	// Each result should be bounded
-	for i, result := range results {
-		if result.IsArray() && len(result.Results) > MaxWildcardResults {
-			t.Errorf("GetMany result[%d] exceeds MaxWildcardResults: got %d", i, len(result.Results))
+	// Each result over the limit must fail rather than be truncated
+	for i, result := range results[:2] {
+		if result.Exists() {
+			t.Errorf("GetMany result[%d] exceeds MaxArrayResults: got %d", i, len(result.Results))
 		}
+		requireLimitError(t, result.Err, "MaxArrayResults")
 	}
-
-	t.Logf("GetMany respects security limits: %d results bounded", len(results))
 }
 
 // TestResultGetWithOptions_SecurityParity tests GetWithOptions maintains limits
@@ -388,11 +393,11 @@ func BenchmarkResultGet_DeepChaining(b *testing.B) {
 	var sb strings.Builder
 	sb.WriteString("<root>")
 	for i := 0; i < 20; i++ {
-		sb.WriteString(fmt.Sprintf("<level%d>", i))
+		fmt.Fprintf(&sb, "<level%d>", i)
 	}
 	sb.WriteString("<value>test</value>")
 	for i := 19; i >= 0; i-- {
-		sb.WriteString(fmt.Sprintf("</level%d>", i))
+		fmt.Fprintf(&sb, "</level%d>", i)
 	}
 	sb.WriteString("</root>")
 	xml := sb.String()

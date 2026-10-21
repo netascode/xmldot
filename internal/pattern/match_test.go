@@ -164,12 +164,44 @@ func TestMatchReDoSProtection(t *testing.T) {
 		expectMatch bool
 	}{
 		{
-			name:        "pathological pattern exceeds limit",
+			name:        "pathological pattern completes within limit",
 			str:         strings.Repeat("a", 100),
 			pattern:     "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b",
-			maxIter:     1000,
+			maxIter:     10000,
+			expectStop:  false,
+			expectMatch: false,
+		},
+		{
+			name:        "pathological pattern exceeds small limit",
+			str:         strings.Repeat("a", 100),
+			pattern:     "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b",
+			maxIter:     100,
 			expectStop:  true,
 			expectMatch: false,
+		},
+		{
+			name:        "trailing star ends immediately",
+			str:         strings.Repeat("a", 1000) + "b",
+			pattern:     "a*",
+			maxIter:     2,
+			expectStop:  false,
+			expectMatch: true,
+		},
+		{
+			name:        "trailing escaped star is literal",
+			str:         "ab",
+			pattern:     "a\\*",
+			maxIter:     100,
+			expectStop:  false,
+			expectMatch: false,
+		},
+		{
+			name:        "very long string completes",
+			str:         strings.Repeat("a", 1000000) + "end",
+			pattern:     "a*a*end",
+			maxIter:     10000000,
+			expectStop:  false,
+			expectMatch: true,
 		},
 		{
 			name:        "simple pattern within limit",

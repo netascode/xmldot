@@ -4,6 +4,7 @@
 package xmldot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -50,7 +51,7 @@ import (
 //
 // This function implements security protections:
 //   - XML validation: Input XML is validated for well-formedness before processing
-//   - Document size limit: Documents larger than MaxDocumentSize (10MB) are rejected
+//   - Security limits: Documents, values and results exceeding any limit are rejected
 //   - Value validation: Values are properly escaped to prevent XML injection
 //   - Path validation: Paths are validated for correct syntax
 //
@@ -59,8 +60,10 @@ import (
 // Returns ErrMalformedXML if:
 //   - XML has unclosed tags
 //   - XML has mismatched opening/closing tags
-//   - XML exceeds size limits
 //   - XML fails well-formedness checks
+//
+// Returns a *LimitError (errors.Is(err, ErrLimitExceeded)) if the input document,
+// the value or the resulting document exceeds a security limit.
 //
 // Example:
 //
@@ -279,8 +282,8 @@ func SetMany(xml string, paths []string, values []interface{}) (string, error) {
 // SetManyBytes is like SetMany but accepts and returns xml as byte slices for efficiency.
 func SetManyBytes(xml []byte, paths []string, values []interface{}) ([]byte, error) {
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return xml, ErrMalformedXML
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return xml, err
 	}
 
 	// Validate inputs
@@ -381,8 +384,8 @@ func DeleteMany(xml string, paths ...string) (string, error) {
 // DeleteManyBytes is like DeleteMany but accepts and returns xml as byte slices for efficiency.
 func DeleteManyBytes(xml []byte, paths ...string) ([]byte, error) {
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return xml, ErrMalformedXML
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return xml, err
 	}
 
 	// Empty inputs - return original XML
@@ -444,24 +447,28 @@ func SetWithOptions(xml, path string, value interface{}, opts *Options) (string,
 }
 
 // SetBytesWithOptions is like SetWithOptions but accepts and returns xml as byte slices for efficiency.
-// Security: Documents larger than MaxDocumentSize (10MB) are rejected to prevent
-// memory exhaustion attacks.
-func SetBytesWithOptions(xml []byte, path string, value interface{}, opts *Options) ([]byte, error) {
+// Security: Documents larger than MaxDocumentSize are rejected, and operations that
+// exceed any security limit return a *LimitError.
+func SetBytesWithOptions(xml []byte, path string, value interface{}, opts *Options) (out []byte, err error) {
+	defer recoverLimitBytes(&out, &err, xml)
+
 	// Nil bytes are invalid
 	if xml == nil {
 		return xml, ErrMalformedXML
 	}
 
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return xml, ErrMalformedXML
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return xml, err
 	}
 
 	// Validate XML well-formedness unless in optimistic mode (future feature)
 	// This prevents crashes from malformed XML discovered by fuzz testing
 	// Special case: empty XML is valid for Set operations (creating new XML from scratch)
-	if len(xml) > 0 && !ValidBytes(xml) {
-		return xml, ErrMalformedXML
+	if len(xml) > 0 {
+		if err := validateForModification(xml); err != nil {
+			return xml, err
+		}
 	}
 	// Empty XML ([]byte{} or "") is valid for Set operations (not for Delete)
 
@@ -484,21 +491,34 @@ func SetBytesWithOptions(xml []byte, path string, value interface{}, opts *Optio
 		return xml, err
 	}
 
-	return []byte(builder.getResult()), nil
+	// Security check: reject results that exceed a security limit (document size,
+	// nesting depth, attributes, token size), so that Set never produces a
+	// document that later operations reject
+	result := []byte(builder.getResult())
+	if verr := ValidateBytesWithError(result); verr != nil {
+		var limitErr *LimitError
+		if errors.As(verr, &limitErr) {
+			return xml, limitErr
+		}
+	}
+
+	return result, nil
 }
 
 // DeleteBytesWithOptions is like DeleteBytes but accepts Options for behavioral control.
 // This is used internally by SetBytesWithOptions when value is nil.
-func DeleteBytesWithOptions(xml []byte, path string, opts *Options) ([]byte, error) {
+func DeleteBytesWithOptions(xml []byte, path string, opts *Options) (out []byte, err error) {
+	defer recoverLimitBytes(&out, &err, xml)
+
 	// Security check: reject documents that are too large
-	if len(xml) > MaxDocumentSize {
-		return xml, ErrMalformedXML
+	if err := checkDocumentSize(len(xml)); err != nil {
+		return xml, err
 	}
 
 	// Validate XML well-formedness unless in optimistic mode (future feature)
 	// This prevents crashes from malformed XML discovered by fuzz testing
-	if !ValidBytes(xml) {
-		return xml, ErrMalformedXML
+	if err := validateForModification(xml); err != nil {
+		return xml, err
 	}
 
 	// Parse the path with options-aware parsing
@@ -516,4 +536,19 @@ func DeleteBytesWithOptions(xml []byte, path string, opts *Options) ([]byte, err
 	}
 
 	return []byte(builder.getResult()), nil
+}
+
+// validateForModification checks that xml is well-formed before it is modified.
+// It returns the *LimitError if validation failed because of a security limit,
+// and ErrMalformedXML for any other validation failure.
+func validateForModification(xml []byte) error {
+	verr := ValidateBytesWithError(xml)
+	if verr == nil {
+		return nil
+	}
+	var limitErr *LimitError
+	if errors.As(verr, &limitErr) {
+		return limitErr
+	}
+	return ErrMalformedXML
 }

@@ -12,12 +12,6 @@ import (
 	"sync"
 )
 
-const (
-	// MaxModifierChainDepth limits the number of chained modifiers to prevent
-	// stack overflow or excessive processing time.
-	MaxModifierChainDepth = 20
-)
-
 // Modifier transforms a Result value.
 // Modifiers are applied after path resolution completes.
 //
@@ -182,7 +176,7 @@ func isBuiltinModifier(name string) bool {
 func applyModifiers(r Result, modifierNames []string) Result {
 	// Security check: limit modifier chain depth
 	if len(modifierNames) > MaxModifierChainDepth {
-		return Result{Type: Null} // Return error for excessive chaining
+		exceedLimit("MaxModifierChainDepth", len(modifierNames), MaxModifierChainDepth)
 	}
 
 	current := r
